@@ -3,6 +3,7 @@
 Pasos (se pueden repetir; lo ya descargado no se vuelve a pedir):
   .venv/bin/python scraper/eldoblaje.py listar             # lista de todos los actores de doblaje
   .venv/bin/python scraper/eldoblaje.py fichas [--max N]   # fichas + clips de voz de cada actor
+  .venv/bin/python scraper/eldoblaje.py fotos              # fotos de los actores ya descargados
 
 Resultado en data/actores/<id>-<nombre>/ (ficha.json y clips/), listo para backend/indexar.py.
 Va despacio a propósito (PAUSA_SEG entre peticiones) para no cargar su servidor.
@@ -135,13 +136,15 @@ def ficha(id_: str, nombre_lista: str) -> str:
             if r is not None and r.headers.get("content-type", "").startswith("audio"):
                 destino.write_bytes(r.content)
 
+    tiene_foto = sopa.find("img", src=f"FotosActores/{id_}.jpg") is not None
+    if tiene_foto:
+        descargar_foto(id_, carpeta)
     trabajos = trabajos_de(sopa)
     datos = {
         "nombre": nombre,
         "id_eldoblaje": int(id_),
         "url": f"https://www.eldoblaje.com/datos/FichaActorDoblaje.asp?id={id_}",
-        "foto": f"https://www.eldoblaje.com/datos/FotosActores/{id_}.jpg"
-                if sopa.find("img", src=f"FotosActores/{id_}.jpg") else "",
+        "foto": f"https://www.eldoblaje.com/datos/FotosActores/{id_}.jpg" if tiene_foto else "",
         "muestras": [m["titulo"] for m in muestras],
         "trabajos": [
             f"{t['personaje'] or t['actor_original']} en {t['obra']}" + (f" ({t['anio']})" if t["anio"] else "")
@@ -151,6 +154,27 @@ def ficha(id_: str, nombre_lista: str) -> str:
     }
     (carpeta / "ficha.json").write_text(json.dumps(datos, ensure_ascii=False, indent=1), encoding="utf-8")
     return "ok"
+
+
+def descargar_foto(id_: str, carpeta: Path):
+    destino = carpeta / "foto.jpg"
+    if destino.exists():
+        return
+    r = pedir(f"{BASE}FotosActores/{id_}.jpg")
+    if r is not None and r.headers.get("content-type", "").startswith("image"):
+        destino.write_bytes(r.content)
+
+
+def fotos():
+    """Descarga la foto de los actores ya bajados que la tengan y aún no esté."""
+    pendientes = []
+    for ficha_path in sorted(ACTORES.glob("*/ficha.json")):
+        datos = json.loads(ficha_path.read_text(encoding="utf-8"))
+        if datos.get("foto") and not (ficha_path.parent / "foto.jpg").exists():
+            pendientes.append((str(datos["id_eldoblaje"]), ficha_path.parent))
+    for n, (id_, carpeta) in enumerate(pendientes, 1):
+        descargar_foto(id_, carpeta)
+        print(f"[{n}/{len(pendientes)}] {carpeta.name}")
 
 
 def fichas(maximo: int | None):
@@ -173,7 +197,7 @@ def fichas(maximo: int | None):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("paso", choices=["listar", "fichas"])
+    p.add_argument("paso", choices=["listar", "fichas", "fotos"])
     p.add_argument("--max", type=int, help="procesar como mucho N actores (para probar)")
     a = p.parse_args()
-    listar() if a.paso == "listar" else fichas(a.max)
+    {"listar": listar, "fotos": fotos}.get(a.paso, lambda: fichas(a.max))()

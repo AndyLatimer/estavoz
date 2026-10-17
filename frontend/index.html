@@ -2,75 +2,229 @@
 <html lang="es">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Estavoz</title>
-<meta name="description" content="Escucha unos segundos de una película o serie y descubre qué actor de doblaje está hablando.">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Estavoz · ¿Quién dobla esta voz?</title>
+<meta name="description" content="Pon el móvil cerca de la tele y descubre en segundos qué actor de doblaje está hablando.">
+<meta name="theme-color" content="#0b0b12">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icono.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icono-192.png">
+<meta property="og:title" content="Estavoz · ¿Quién dobla esta voz?">
+<meta property="og:description" content="El Shazam de los actores de doblaje.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
-  :root { --bg:#0f1115; --card:#1a1d24; --txt:#f2f2f2; --sub:#9aa0aa; --acc:#ff5a36; }
-  * { box-sizing: border-box; }
-  body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--txt);
-         display:flex; flex-direction:column; align-items:center; padding:24px 16px; min-height:100vh; }
-  h1 { margin:8px 0 4px; font-size:28px; }
-  p.sub { color:var(--sub); margin:0 0 32px; text-align:center; }
-  #btn { width:180px; height:180px; border-radius:50%; border:none; background:var(--acc); color:#fff;
-         font-size:20px; font-weight:700; cursor:pointer; box-shadow:0 0 0 0 rgba(255,90,54,.6); }
-  #btn:disabled { opacity:.5; cursor:default; }
-  #btn.grabando { animation: pulso 1.2s infinite; opacity:1; }
-  @keyframes pulso { 0%{box-shadow:0 0 0 0 rgba(255,90,54,.6)} 100%{box-shadow:0 0 0 40px rgba(255,90,54,0)} }
-  #estado { margin:24px 0 8px; color:var(--sub); min-height:1.4em; text-align:center; }
-  #subir { color:var(--sub); font-size:14px; margin-bottom:24px; }
-  #subir label { color:var(--acc); cursor:pointer; text-decoration:underline; }
-  #resultados { width:100%; max-width:480px; display:grid; gap:12px; }
-  .card { background:var(--card); border-radius:14px; padding:14px; display:flex; gap:14px; }
-  .card img, .inicial { width:72px; height:72px; object-fit:cover; border-radius:10px; background:#333; flex-shrink:0; }
-  .inicial { display:flex; align-items:center; justify-content:center; font-size:30px; font-weight:700; color:var(--sub); }
-  .card h2 { margin:0; font-size:18px; }
-  .pct { color:var(--acc); font-weight:700; }
-  .card ul { margin:6px 0; padding-left:18px; color:var(--sub); font-size:14px; }
-  .card a { color:var(--acc); font-size:14px; }
-  .principal { outline:2px solid var(--acc); }
-  footer { margin-top:auto; padding-top:32px; color:var(--sub); font-size:12px; text-align:center; max-width:480px; }
-  footer a { color:var(--sub); }
+  :root {
+    --bg: #0b0b12;
+    --panel: rgba(255,255,255,.055);
+    --borde: rgba(255,255,255,.09);
+    --txt: #f5f3ff;
+    --sub: #a29fb8;
+    --a1: #ff6a3d;
+    --a2: #ff2e7e;
+    --a3: #8b5cf6;
+    --grad: linear-gradient(135deg, var(--a1), var(--a2) 55%, var(--a3));
+    --nivel: 0;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; }
+  body {
+    min-height: 100dvh; background: var(--bg); color: var(--txt);
+    font-family: Outfit, system-ui, sans-serif; overflow-x: hidden;
+  }
+
+  /* manchas de color del fondo */
+  .fondo { position: fixed; inset: 0; z-index: -1; overflow: hidden; }
+  .fondo i { position: absolute; width: 60vmax; height: 60vmax; border-radius: 50%; filter: blur(90px); opacity: .32; }
+  .fondo i:nth-child(1) { background: var(--a1); top: -25vmax; left: -20vmax; animation: flota 18s ease-in-out infinite alternate; }
+  .fondo i:nth-child(2) { background: var(--a3); bottom: -30vmax; right: -25vmax; animation: flota 22s ease-in-out infinite alternate-reverse; }
+  .fondo i:nth-child(3) { background: var(--a2); top: 40%; left: 50%; width: 35vmax; height: 35vmax; opacity: .18; animation: flota 26s ease-in-out infinite alternate; }
+  @keyframes flota { to { transform: translate(8vmax, 6vmax) scale(1.15); } }
+
+  main { width: 100%; max-width: 460px; margin: 0 auto; padding: max(28px, env(safe-area-inset-top)) 16px 24px;
+         display: flex; flex-direction: column; align-items: center; min-height: 100dvh; }
+
+  header { display: flex; align-items: center; gap: 10px; }
+  header svg { width: 34px; height: 34px; }
+  .marca { font-size: 30px; font-weight: 800; letter-spacing: -.02em;
+           background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lema { color: var(--sub); text-align: center; margin: 10px 0 0; font-size: 17px; line-height: 1.4; }
+
+  /* botón principal */
+  .escena { position: relative; width: 250px; height: 250px; margin: 44px 0 20px; display: grid; place-items: center; }
+  .onda { position: absolute; inset: 22px; border-radius: 50%; border: 2px solid var(--a2); opacity: 0; }
+  .grabando .onda { animation: onda 2.4s cubic-bezier(.2,.6,.4,1) infinite; }
+  .grabando .onda:nth-child(2) { animation-delay: .8s; }
+  .grabando .onda:nth-child(3) { animation-delay: 1.6s; }
+  @keyframes onda { from { transform: scale(.8); opacity: .7; } to { transform: scale(1.5); opacity: 0; } }
+
+  .progreso { position: absolute; inset: 0; transform: rotate(-90deg); }
+  .progreso circle { fill: none; stroke-width: 5; }
+  .progreso .pista { stroke: rgba(255,255,255,.07); }
+  .progreso .barra { stroke: url(#gradAro); stroke-linecap: round; stroke-dasharray: 741; stroke-dashoffset: 741; opacity: 0; transition: opacity .3s; }
+  .grabando .progreso .barra { opacity: 1; }
+
+  #btn {
+    position: relative; width: 176px; height: 176px; border-radius: 50%; border: 0; cursor: pointer;
+    background: var(--grad); color: #fff; display: grid; place-items: center; font: inherit;
+    box-shadow: 0 20px 60px -10px rgba(255,46,126,.55), inset 0 2px 0 rgba(255,255,255,.25);
+    transition: transform .25s ease, filter .25s ease, opacity .25s;
+    transform: scale(calc(1 + var(--nivel) * .12));
+    animation: respira 3.2s ease-in-out infinite;
+  }
+  #btn::after { content: ""; position: absolute; inset: -14px; border-radius: 50%; z-index: -1;
+                background: var(--grad); filter: blur(28px); opacity: calc(.35 + var(--nivel) * .6); }
+  @keyframes respira { 50% { box-shadow: 0 20px 80px -6px rgba(255,46,126,.75), inset 0 2px 0 rgba(255,255,255,.25); } }
+  #btn:active { transform: scale(.96); }
+  #btn:disabled { cursor: default; filter: grayscale(.6) brightness(.7); animation: none; }
+  .grabando #btn { animation: none; filter: none; }
+  .analizando #btn { animation: gira 1.4s linear infinite; filter: none; }
+  @keyframes gira { to { filter: hue-rotate(360deg); } }
+  #btn svg { width: 64px; height: 64px; }
+  #btn span { position: absolute; bottom: 30px; font-weight: 600; font-size: 15px; letter-spacing: .08em; text-transform: uppercase; opacity: .9; }
+
+  .barras { display: flex; gap: 4px; align-items: center; height: 40px; margin-bottom: 6px; opacity: 0; transition: opacity .3s; }
+  .grabando + .barras { opacity: 1; }
+  .barras i { width: 4px; height: 6px; border-radius: 4px; background: var(--grad); transition: height .08s; }
+
+  #estado { min-height: 28px; font-size: 18px; font-weight: 500; text-align: center; }
+  .carga { width: 180px; height: 4px; border-radius: 4px; background: rgba(255,255,255,.08); overflow: hidden; margin-top: 10px; }
+  .carga div { height: 100%; width: 0; background: var(--grad); transition: width .2s; }
+  .subir { margin-top: 10px; color: var(--sub); font-size: 14px; }
+  .subir label { color: var(--txt); cursor: pointer; border-bottom: 1px dashed var(--sub); }
+
+  /* resultados */
+  #resultados { width: 100%; margin-top: 26px; display: grid; gap: 14px; }
+  .tarjeta { background: var(--panel); border: 1px solid var(--borde); border-radius: 24px; padding: 18px;
+             backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); animation: entra .5s cubic-bezier(.2,.8,.2,1) both; }
+  @keyframes entra { from { opacity: 0; transform: translateY(18px) scale(.98); } }
+  .principal { padding: 22px; position: relative; overflow: hidden; }
+  .principal::before { content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1.5px;
+                       background: var(--grad); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+                       -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none; }
+  .etiqueta { font-size: 12px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--sub); }
+  .quien { display: flex; gap: 16px; align-items: center; margin-top: 12px; }
+  .avatar { flex-shrink: 0; width: 84px; height: 84px; border-radius: 22px; object-fit: cover; object-position: top;
+            display: grid; place-items: center; font-size: 30px; font-weight: 700; color: #fff; }
+  .avatar.peq { width: 48px; height: 48px; border-radius: 14px; font-size: 17px; }
+  .nombre { font-size: 26px; font-weight: 700; line-height: 1.1; letter-spacing: -.01em; }
+  .peq-txt { color: var(--sub); font-size: 14px; margin-top: 4px; }
+  .medidor { margin-top: 18px; }
+  .medidor .fila { display: flex; justify-content: space-between; font-size: 14px; color: var(--sub); }
+  .medidor .fila b { color: var(--txt); font-size: 16px; }
+  .medidor .pista { height: 8px; border-radius: 8px; background: rgba(255,255,255,.08); margin-top: 8px; overflow: hidden; }
+  .medidor .pista div { height: 100%; border-radius: 8px; background: var(--grad); width: 0; transition: width 1s cubic-bezier(.2,.8,.2,1) .2s; }
+  .papeles { list-style: none; margin: 18px 0 0; padding: 0; display: grid; gap: 10px; }
+  .papeles li { display: grid; gap: 2px; padding: 10px 12px; border-radius: 14px; background: rgba(255,255,255,.04); }
+  .papeles .obra { font-size: 11px; font-weight: 600; letter-spacing: .08em; color: var(--sub); text-transform: uppercase; }
+  .papeles .personaje { font-size: 15px; font-weight: 500; }
+  .acciones { display: flex; gap: 10px; margin-top: 18px; }
+  .acciones button { flex: 1; padding: 13px; border-radius: 14px; border: 1px solid var(--borde); background: rgba(255,255,255,.06);
+                     color: var(--txt); font: inherit; font-weight: 600; cursor: pointer; }
+  .acciones button.prim { background: var(--grad); border: 0; }
+  .otros { display: grid; gap: 10px; margin-top: 12px; }
+  .otro { display: flex; align-items: center; gap: 12px; }
+  .otro .nombre { font-size: 17px; font-weight: 600; }
+  .otro .pct { margin-left: auto; font-weight: 700; color: var(--sub); }
+
+  footer { margin-top: auto; padding-top: 40px; color: var(--sub); font-size: 13px; text-align: center; display: flex; gap: 6px; align-items: center; }
+  footer svg { width: 14px; height: 14px; flex-shrink: 0; }
+
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 </style>
 </head>
 <body>
-  <h1>Estavoz</h1>
-  <p class="sub">Pon el móvil cerca de la tele y descubre quién dobla esa voz</p>
-  <button id="btn" disabled>Escuchar</button>
-  <div id="estado">Cargando…</div>
-  <div id="subir">o <label for="fichero">sube un audio</label><input type="file" id="fichero" accept="audio/*,video/*" hidden></div>
-  <div id="resultados"></div>
+<div class="fondo"><i></i><i></i><i></i></div>
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <linearGradient id="gradAro" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff6a3d"/><stop offset=".55" stop-color="#ff2e7e"/><stop offset="1" stop-color="#8b5cf6"/>
+    </linearGradient>
+  </defs>
+</svg>
+<main>
+  <header>
+    <svg viewBox="0 0 40 40" aria-hidden="true">
+      <rect width="40" height="40" rx="12" fill="url(#gradAro)"/>
+      <g stroke="#fff" stroke-width="3" stroke-linecap="round"><path d="M11 17v6M16 13v14M21 9v22M26 14v12M31 18v4"/></g>
+    </svg>
+    <div class="marca">estavoz</div>
+  </header>
+  <p class="lema">Pon el móvil cerca de la tele y descubre<br>quién está doblando esa voz</p>
+
+  <div class="escena" id="escena">
+    <div class="onda"></div><div class="onda"></div><div class="onda"></div>
+    <svg class="progreso" viewBox="0 0 250 250"><circle class="pista" cx="125" cy="125" r="118"/><circle class="barra" id="aro" cx="125" cy="125" r="118"/></svg>
+    <button id="btn" disabled aria-label="Escuchar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="9" y="2.5" width="6" height="12" rx="3" fill="#fff"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/>
+      </svg>
+      <span>Escuchar</span>
+    </button>
+  </div>
+  <div class="barras" id="barras"></div>
+
+  <div id="estado">Preparando…</div>
+  <div class="carga" id="carga"><div></div></div>
+  <div class="subir">o <label for="fichero">sube un audio</label><input type="file" id="fichero" accept="audio/*,video/*" hidden></div>
+
+  <section id="resultados" aria-live="polite"></section>
+
   <footer>
-    El audio se analiza en tu propio dispositivo y no se envía a ningún sitio.<br>
-    Fichas y muestras de voz: <a href="https://www.eldoblaje.com" target="_blank" rel="noopener">eldoblaje.com</a>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+    El audio se analiza en tu móvil y nunca sale de él
   </footer>
+</main>
+
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.wasm.min.js"></script>
 <script>
 const SR = 16000, SEGUNDOS = 8;
 const TROZO = 6 * SR, TROZO_MIN = 2 * SR, MAX_CONSULTA = 20 * SR;  // igual que backend/voz.py
-const btn = document.getElementById('btn');
-const estado = document.getElementById('estado');
-const res = document.getElementById('resultados');
+const $ = id => document.getElementById(id);
+const btn = $('btn'), estado = $('estado'), res = $('resultados'), escena = $('escena'), aro = $('aro');
+const ARO = 2 * Math.PI * 118;
 
 ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/';
 ort.env.wasm.numThreads = 1;
 
+const barras = $('barras');
+for (let i = 0; i < 28; i++) barras.appendChild(document.createElement('i'));
+
 let sesion, huellas, etiquetas, actores, dim;
 
+// Descarga con barra de progreso (el modelo pesa ~22 MB la primera vez)
+async function descargar(url, alAvanzar) {
+  const r = await fetch(url);
+  const total = +r.headers.get('content-length') || 0;
+  if (!total || !r.body) return new Uint8Array(await r.arrayBuffer());
+  const datos = new Uint8Array(total); let hecho = 0;
+  const lector = r.body.getReader();
+  for (;;) {
+    const { done, value } = await lector.read();
+    if (done) break;
+    datos.set(value, hecho); hecho += value.length; alAvanzar(hecho / total);
+  }
+  return datos;
+}
+
 async function cargar() {
+  const barra = $('carga').firstElementChild;
   try {
-    const [s, bin, meta] = await Promise.all([
-      ort.InferenceSession.create('modelo/ecapa-int8.onnx'),
+    const [modelo, bin, meta] = await Promise.all([
+      descargar('modelo/ecapa-int8.onnx', p => { barra.style.width = `${p * 100}%`; estado.textContent = `Preparando… ${Math.round(p * 100)}%`; }),
       fetch('datos/huellas.bin').then(r => r.arrayBuffer()),
       fetch('datos/actores.json').then(r => r.json()),
     ]);
-    sesion = s; huellas = new Float32Array(bin); dim = meta.dim;
+    sesion = await ort.InferenceSession.create(modelo);
+    huellas = new Float32Array(bin); dim = meta.dim;
     etiquetas = Int32Array.from(meta.etiquetas); actores = meta.actores;
-    estado.textContent = `Listo · ${actores.length} actores de doblaje`;
+    $('carga').remove();
+    estado.textContent = `Toca para escuchar · ${actores.length} voces`;
     btn.disabled = false;
   } catch (e) {
     console.error(e);
-    estado.textContent = 'No se pudo cargar Estavoz. Recarga la página.';
+    estado.textContent = 'No se pudo cargar. Recarga la página.';
   }
 }
 
@@ -124,17 +278,21 @@ function puntuar(consulta, top = 3) {
   return lista.sort((x, y) => y.parecido - x.parecido).slice(0, top);
 }
 
+function modo(m) { escena.className = 'escena ' + (m || ''); }
+
 async function identificar(blob) {
+  modo('analizando');
   estado.textContent = 'Analizando la voz…';
   res.innerHTML = '';
   try {
     const consulta = await huellasDe(await a16k(blob));
-    if (!consulta.length) throw new Error('Audio demasiado corto: graba al menos 3 segundos');
+    if (!consulta.length) throw new Error('corto');
     pintar(puntuar(consulta));
   } catch (e) {
     console.error(e);
-    estado.textContent = e.message.startsWith('Audio') ? e.message : 'No se pudo leer el audio';
+    estado.textContent = e.message === 'corto' ? 'Muy corto: necesito al menos 3 segundos' : 'No he podido leer ese audio';
   }
+  modo(); aro.style.strokeDashoffset = ARO;
   btn.disabled = false;
 }
 
@@ -145,46 +303,121 @@ btn.onclick = async () => {
     stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
   } catch { estado.textContent = 'Necesito permiso para usar el micrófono'; return; }
+
+  // volumen en directo para las barras y el brillo del botón
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const analizador = ctx.createAnalyser(); analizador.fftSize = 128;
+  ctx.createMediaStreamSource(stream).connect(analizador);
+  const frec = new Uint8Array(analizador.frequencyBinCount);
+  const palos = [...barras.children];
+  let vivo = true;
+  (function dibuja() {
+    if (!vivo) return;
+    analizador.getByteFrequencyData(frec);
+    palos.forEach((p, i) => { p.style.height = `${6 + frec[i + 2] / 255 * 34}px`; });
+    const media = frec.reduce((a, b) => a + b, 0) / frec.length / 255;
+    document.documentElement.style.setProperty('--nivel', Math.min(1, media * 2.2).toFixed(3));
+    requestAnimationFrame(dibuja);
+  })();
+
   const rec = new MediaRecorder(stream);
   const partes = [];
   rec.ondataavailable = e => partes.push(e.data);
   rec.onstop = () => {
+    vivo = false; ctx.close();
+    document.documentElement.style.setProperty('--nivel', 0);
     stream.getTracks().forEach(t => t.stop());
-    btn.classList.remove('grabando');
     identificar(new Blob(partes, { type: rec.mimeType }));
   };
+
   res.innerHTML = '';
-  btn.disabled = true; btn.classList.add('grabando');
-  let quedan = SEGUNDOS;
-  estado.textContent = `Escuchando… ${quedan}`;
-  const t = setInterval(() => { quedan--; estado.textContent = `Escuchando… ${quedan}`; }, 1000);
+  btn.disabled = true; modo('grabando');
+  const t0 = performance.now();
+  aro.style.transition = 'none'; aro.style.strokeDashoffset = ARO;
+  (function avanza() {
+    const p = Math.min(1, (performance.now() - t0) / (SEGUNDOS * 1000));
+    aro.style.strokeDashoffset = ARO * (1 - p);
+    estado.textContent = `Escuchando… ${Math.ceil(SEGUNDOS * (1 - p))}`;
+    if (p < 1) requestAnimationFrame(avanza);
+  })();
   rec.start();
-  setTimeout(() => { clearInterval(t); rec.stop(); }, SEGUNDOS * 1000);
+  setTimeout(() => rec.stop(), SEGUNDOS * 1000);
 };
 
-document.getElementById('fichero').onchange = e => {
+$('fichero').onchange = e => {
   const f = e.target.files[0];
   if (f && sesion) { btn.disabled = true; identificar(f); }
   e.target.value = '';
 };
 
 // El parecido del modelo (coseno) no es un porcentaje; esto lo traduce a algo legible.
-// Calibrado con los clips de eldoblaje: la misma voz suele dar > 0.65, voces distintas < 0.5.
+// Calibrado con clips reales de doblaje: la misma voz suele dar > 0.65, voces distintas < 0.5.
 const aPorcentaje = s => Math.round(Math.max(0, Math.min(1, (s - 0.35) / 0.4)) * 100);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+// Avatar: foto si la hay; si no, iniciales sobre un degradado propio de cada nombre
+function avatar(a, peq = false) {
+  const clase = 'avatar' + (peq ? ' peq' : '');
+  if (a.foto) return `<img class="${clase}" src="${esc(a.foto)}" alt="">`;
+  let h = 0; for (const c of a.nombre) h = (h * 31 + c.charCodeAt(0)) % 360;
+  const ini = a.nombre.split(/\s+/).filter(Boolean).map(p => p[0]).slice(0, 2).join('').toUpperCase();
+  return `<div class="${clase}" style="background:linear-gradient(135deg,hsl(${h} 80% 58%),hsl(${(h + 50) % 360} 75% 42%))">${esc(ini)}</div>`;
+}
+
+// "Jon Nieve en JUEGO DE TRONOS (2019)" -> personaje, obra, año
+function papel(t) {
+  const m = t.match(/^(.*?) en (.+?)(?: \((\d{4})\))?$/);
+  return m ? { personaje: m[1], obra: m[2], anio: m[3] } : { personaje: t, obra: '', anio: '' };
+}
+
+let ultimo;
 function pintar(lista) {
-  estado.textContent = aPorcentaje(lista[0].parecido) >= 50 ? '¡Te lo tengo!' : 'No estoy muy seguro… ¿será alguno de estos?';
-  res.innerHTML = lista.map((a, i) => `
-    <div class="card ${i === 0 ? 'principal' : ''}">
-      ${a.foto ? `<img src="${esc(a.foto)}" alt="" onerror="this.outerHTML='<div class=inicial>${esc(a.nombre[0])}</div>'">`
-               : `<div class="inicial">${esc(a.nombre[0])}</div>`}
-      <div>
-        <h2>${esc(a.nombre)} <span class="pct">${aPorcentaje(a.parecido)}%</span></h2>
-        ${a.trabajos?.length ? `<ul>${a.trabajos.slice(0, 5).map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
-        ${a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener">Ficha completa en eldoblaje.com →</a>` : ''}
+  const [top, ...otros] = lista;
+  const pct = aPorcentaje(top.parecido);
+  ultimo = top;
+  estado.textContent = pct >= 50 ? '¡Te lo tengo!' : 'No estoy muy seguro… ¿es alguno de estos?';
+  const papeles = (top.trabajos || []).slice(0, 4).map(papel);
+  res.innerHTML = `
+    <article class="tarjeta principal">
+      <div class="etiqueta">Esta voz es de</div>
+      <div class="quien">
+        ${avatar(top)}
+        <div>
+          <div class="nombre">${esc(top.nombre)}</div>
+          ${top.num_trabajos ? `<div class="peq-txt">${top.num_trabajos >= 50 ? 'Más de 50' : top.num_trabajos} doblajes</div>` : ''}
+        </div>
       </div>
-    </div>`).join('');
+      <div class="medidor">
+        <div class="fila"><span>Coincidencia</span><b>${pct}%</b></div>
+        <div class="pista"><div id="medida"></div></div>
+      </div>
+      ${papeles.length ? `<div class="etiqueta" style="margin-top:20px">Le has oído como</div>
+      <ul class="papeles">${papeles.map(p => `
+        <li><span class="personaje">${esc(p.personaje)}</span>
+            <span class="obra">${esc(p.obra)}${p.anio ? ' · ' + p.anio : ''}</span></li>`).join('')}
+      </ul>` : ''}
+      <div class="acciones">
+        <button class="prim" onclick="btn.click()">Escuchar otra</button>
+        <button onclick="compartir()">Compartir</button>
+      </div>
+    </article>
+    ${otros.length ? `<article class="tarjeta" style="animation-delay:.12s">
+      <div class="etiqueta">También podría ser</div>
+      <div class="otros">${otros.map(o => `
+        <div class="otro">${avatar(o, true)}<span class="nombre">${esc(o.nombre)}</span><span class="pct">${aPorcentaje(o.parecido)}%</span></div>`).join('')}
+      </div>
+    </article>` : ''}`;
+  requestAnimationFrame(() => requestAnimationFrame(() => { $('medida').style.width = pct + '%'; }));
+  res.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function compartir() {
+  const texto = `🎙️ Acabo de descubrir con Estavoz que esa voz es de ${ultimo.nombre}. ¿Quién dobla lo que estás viendo tú?`;
+  const datos = { title: 'Estavoz', text: texto, url: location.href.split('#')[0] };
+  try {
+    if (navigator.share) await navigator.share(datos);
+    else { await navigator.clipboard.writeText(`${texto} ${datos.url}`); estado.textContent = 'Copiado, ¡pégalo donde quieras!'; }
+  } catch {}
 }
 
 cargar();
