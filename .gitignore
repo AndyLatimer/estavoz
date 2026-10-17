@@ -4,3 +4,5 @@ data/actores/
 data/indice.npz
 data/fichas.json
 __pycache__/
+data/eldoblaje_*.json
+.venv

@@ -8,6 +8,12 @@ Escucha unos segundos de una película o serie y dice qué actor de doblaje habl
 3. `backend/app.py` recibe la grabación del móvil, calcula su huella y devuelve los 3 actores más parecidos.
 4. `frontend/index.html` es la web con el botón "Escuchar".
 
+## Datos de eldoblaje.com
+```bash
+.venv/bin/python scraper/eldoblaje.py listar      # lista de actores de doblaje
+.venv/bin/python scraper/eldoblaje.py fichas      # fichas y clips (se puede cortar y reanudar)
+```
+
 ## Uso
 ```bash
 python3 -m venv .venv
@@ -19,6 +25,6 @@ python3 -m venv .venv
 Abre http://localhost:8000 (el micrófono solo funciona en localhost o con https).
 
 ## Pendiente
-- `scraper/` para traer fichas y clips de eldoblaje.com (necesita acceso a la web).
+- Ampliar el índice a todos los actores de eldoblaje.com con muestras de voz.
 - Separar la voz de la música/efectos (Demucs) para audio de películas.
 - Subirlo a un servidor con https.
