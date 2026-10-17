@@ -6,6 +6,7 @@ Genera en frontend/:
   datos/actores.json    fichas, en el mismo orden que los centroides
   fotos/<n>.jpg
 La web no enlaza ni carga nada de fuera.
+Si existe data/respuestas.json (backend/aprender.py), añade las respuestas "¿Acertamos?" que pasen los filtros.
 El índice tiene que estar hecho con ESTAVOZ_ONNX=frontend/modelo/ecapa-int8.onnx.
 """
 import json
@@ -20,6 +21,34 @@ sys.path.insert(0, str(RAIZ / "backend"))
 from lda import centroides, entrenar_lda, proyectar  # noqa: E402
 
 
+def respuestas_validas(mu, W, C, slugs):
+    """Huellas de las respuestas de los usuarios que se pueden usar para aprender.
+
+    Filtros contra respuestas falsas o despistes:
+      - solo respuestas con un actor ("No lo sé" no enseña nada);
+      - la voz tiene que parecerse algo a ese actor (parecido >= 0.2 y entre sus 10 más parecidos);
+      - cada actor recibe como mucho tantas huellas de usuarios como trozos propios tiene.
+    """
+    f = RAIZ / "data" / "respuestas.json"
+    if not f.exists():
+        return [], []
+    pos = {s: i for i, s in enumerate(slugs)}
+    X, y = [], []
+    for r in json.loads(f.read_text(encoding="utf-8")):
+        actor = r["propuesto"] if r["acierto"] else r.get("real")
+        if actor not in pos:
+            continue
+        h = np.asarray(r["huellas"], dtype=np.float32)
+        if h.ndim != 2 or h.shape[1] != C.shape[1]:
+            continue
+        h = h / np.linalg.norm(h, axis=1, keepdims=True)
+        punt = (proyectar(h, mu, W) @ C.T).mean(0)
+        if punt[pos[actor]] >= 0.2 and pos[actor] in np.argsort(-punt)[:10]:
+            X.append(h)
+            y += [actor] * len(h)
+    return X, y
+
+
 def main():
     datos = np.load(RAIZ / "data" / "indice.npz")
     X, y, clips = datos["vectores"], datos["etiquetas"], datos["clips"]
@@ -31,6 +60,19 @@ def main():
     sel = np.isin(y, [a for a in slugs if n_clips[a] >= 2])
     mu, W = entrenar_lda(X[sel], y[sel])
     C = centroides(proyectar(X, mu, W), y, slugs)
+
+    # lo que han enseñado los usuarios entra en la huella media de cada actor
+    Xr, yr = respuestas_validas(mu, W, C, slugs)
+    if Xr:
+        Xr, yr = np.concatenate(Xr), np.array(yr)
+        propios = {a: int((y == a).sum()) for a in slugs}
+        vistos, tope = {}, np.zeros(len(yr), dtype=bool)
+        for i, a in enumerate(yr):
+            vistos[a] = vistos.get(a, 0) + 1
+            tope[i] = vistos[a] <= propios[a]
+        Xr, yr = Xr[tope], yr[tope]
+        C = centroides(proyectar(np.concatenate([X, Xr]), mu, W), np.concatenate([y, yr]), slugs)
+        print(f"Respuestas de usuarios usadas: {len(yr)} huellas de {len(set(yr))} actores")
 
     salida = RAIZ / "frontend" / "datos"
     shutil.rmtree(salida, ignore_errors=True)
@@ -47,6 +89,7 @@ def main():
         if foto.exists():
             shutil.copy(foto, fotos / f"{i}.jpg")
         actores.append({
+            "id": s,
             "nombre": fichas[s]["nombre"],
             "foto": f"fotos/{i}.jpg" if foto.exists() else "",
             "trabajos": fichas[s].get("trabajos", []),

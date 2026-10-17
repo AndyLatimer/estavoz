@@ -10,3 +10,5 @@ data/cache_huellas/
 frontend/modelo/
 frontend/datos/
 frontend/fotos/
+data/podcasts/
+data/respuestas.json

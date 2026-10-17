@@ -127,6 +127,14 @@
   .otro .n { font-size: 20px; font-weight: 600; }
   .otro .pct { margin-left: auto; font: 600 13px var(--mono); color: var(--gris); }
 
+  .pregunta { margin-top: 18px; padding-top: 16px; border-top: 1px dashed var(--linea); }
+  .pregunta .fila { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+  .pregunta button, .pregunta input { font: 600 12px var(--mono); letter-spacing: .08em; padding: 10px 14px; border-radius: 4px;
+                                      background: transparent; color: var(--papel); border: 1px solid var(--linea); cursor: pointer; }
+  .pregunta button:active { background: var(--linea); }
+  .pregunta input { flex: 1; min-width: 0; cursor: text; letter-spacing: 0; font-weight: 400; }
+  .pregunta .nota { font: 11px/1.5 var(--mono); color: var(--gris); margin-top: 10px; }
+  .pregunta .gracias { font-style: italic; font-size: 17px; }
   footer { margin-top: auto; padding-top: 40px; font: 11px/1.6 var(--mono); color: var(--gris); text-align: center; letter-spacing: .04em; }
 
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
@@ -164,6 +172,7 @@
   <footer>El audio se analiza en tu móvil<br>y nunca sale de él</footer>
 </main>
 
+<script src="config.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.wasm.min.js"></script>
 <script>
 const SR = 16000, SEGUNDOS = 8, FPS = 25;
@@ -280,6 +289,7 @@ async function identificar(blob) {
   try {
     const consulta = await huellasDe(await a16k(blob));
     if (!consulta.length) throw new Error('corto');
+    ultimaConsulta = consulta;
     pintar(puntuar(consulta));
   } catch (e) {
     console.error(e);
@@ -365,7 +375,50 @@ function papel(t) {
   return m ? { personaje: m[1], obra: m[2], anio: m[3] } : { personaje: t, obra: '', anio: '' };
 }
 
-let ultimo;
+let ultimo, ultimaConsulta;
+const CONFIG = window.ESTAVOZ_CONFIG || {};
+
+// "¿Acertamos?": se guarda solo la huella de voz (unos números), nunca el audio.
+function pregunta(otros) {
+  if (!CONFIG.supabaseUrl) return '';
+  return `<div class="pregunta" id="pregunta">
+    <div class="rotulo"><span>¿ACERTAMOS?</span></div>
+    <div class="fila"><button onclick="responder(true)">Sí, es esa voz</button><button onclick="mostrarOtros()">No</button></div>
+    <div class="nota">Si respondes, guardamos una huella anónima de la voz (nunca el audio) para que Estavoz aprenda.</div>
+  </div>`;
+}
+
+function mostrarOtros() {
+  const opciones = res.dataset.otros ? JSON.parse(res.dataset.otros) : [];
+  $('pregunta').innerHTML = `
+    <div class="rotulo"><span>¿QUIÉN ERA?</span></div>
+    <div class="fila">${opciones.map(o => `<button onclick='responder(false, ${JSON.stringify(o.id)})'>${esc(o.nombre)}</button>`).join('')}</div>
+    <div class="fila"><input id="quien" list="nombres" placeholder="Escribe su nombre…" autocomplete="off">
+      <button onclick="responderNombre()">Enviar</button></div>
+    <div class="fila"><button onclick="responder(false)">No lo sé</button></div>
+    <datalist id="nombres">${actores.map(a => `<option value="${esc(a.nombre)}">`).join('')}</datalist>`;
+}
+
+function responderNombre() {
+  const n = $('quien').value.trim().toLowerCase();
+  const a = actores.find(x => x.nombre.toLowerCase() === n);
+  if (!a) { $('quien').value = ''; $('quien').placeholder = 'Elige un nombre de la lista'; return; }
+  responder(false, a.id);
+}
+
+async function responder(acierto, real = null) {
+  $('pregunta').innerHTML = '<div class="gracias">¡Gracias! Así Estavoz aprende.</div>';
+  const huellas = ultimaConsulta.slice(0, 4).map(h => Array.from(h, v => Math.round(v * 1e4) / 1e4));
+  try {
+    await fetch(`${CONFIG.supabaseUrl}/rest/v1/respuestas`, {
+      method: 'POST',
+      headers: { apikey: CONFIG.supabaseKey, Authorization: `Bearer ${CONFIG.supabaseKey}`,
+                 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify({ propuesto: ultimo.id, acierto, real, huellas, version: '1' }),
+    });
+  } catch (e) { console.error(e); }
+}
+
 function pintar(lista) {
   const [top, ...otros] = lista;
   const pct = aPorcentaje(top.parecido);
@@ -373,6 +426,7 @@ function pintar(lista) {
   estado.textContent = pct >= 50 ? '¡Corten! La tenemos.' : 'Toma dudosa… ¿será alguno de estos?';
   const encendidos = Math.round(pct / 5);
   const papeles = (top.trabajos || []).slice(0, 4).map(papel);
+  res.dataset.otros = JSON.stringify(otros.map(o => ({ id: o.id, nombre: o.nombre })));
   res.innerHTML = `
     <article class="ficha principal">
       <div class="rotulo"><span>TOMA ${String(toma).padStart(2, '0')}</span><span>ESTA VOZ ES DE</span></div>
@@ -397,6 +451,7 @@ function pintar(lista) {
         <button class="prim" onclick="btn.click()">Otra toma</button>
         <button onclick="compartir()">Compartir</button>
       </div>
+      ${pregunta(otros)}
     </article>
     ${otros.length ? `<article class="ficha" style="animation-delay:.12s">
       <div class="rotulo"><span>TAMBIÉN PODRÍA SER</span></div>
