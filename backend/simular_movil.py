@@ -41,3 +41,56 @@ def movil(audio: np.ndarray, rng: np.random.Generator | None = None) -> np.ndarr
     # micrófono del móvil
     x = sosfilt(butter(2, 100, btype="high", fs=SR, output="sos"), x)
     return (x / (np.abs(x).max() + 1e-9) * 0.5).astype(np.float32)
+
+
+# --- Versión realista: ecos de habitaciones y ruidos grabados de verdad -------------------------
+# Base pública OpenSLR 28 (RIRS_NOISES, licencia Apache 2.0) en data/ruidos/RIRS_NOISES.
+from functools import lru_cache  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+RUIDOS = Path(__file__).resolve().parent.parent / "data" / "ruidos" / "RIRS_NOISES"
+
+
+@lru_cache(maxsize=1)
+def _banco(n_ecos: int = 400, n_ruidos: int = 400, semilla: int = 0):
+    import soundfile as sf
+    rng = np.random.default_rng(semilla)
+    reales = sorted(RUIDOS.glob("real_rirs_isotropic_noises/*rir*.wav"))
+    simulados = sorted(RUIDOS.glob("simulated_rirs/smallroom/*/*.wav")) + sorted(RUIDOS.glob("simulated_rirs/mediumroom/*/*.wav"))
+    rutas_eco = list(rng.choice(reales, min(len(reales), n_ecos // 2), replace=False)) + \
+                list(rng.choice(simulados, n_ecos // 2, replace=False))
+    ruidos = sorted(RUIDOS.glob("pointsource_noises/*.wav")) + sorted(RUIDOS.glob("real_rirs_isotropic_noises/*noise*.wav"))
+    rutas_ruido = rng.choice(ruidos, min(len(ruidos), n_ruidos), replace=False)
+
+    def leer(r):
+        x, _ = sf.read(r, dtype="float32", always_2d=True)
+        return x[:, 0]
+    ecos = []
+    for r in rutas_eco:
+        x = leer(r)
+        x = x[max(0, int(np.argmax(np.abs(x))) - 16):]   # empezar justo antes del sonido directo
+        ecos.append(x / (np.sqrt((x ** 2).sum()) + 1e-9))
+    return ecos, [x for x in map(leer, rutas_ruido) if len(x) > SR // 4]
+
+
+def movil_real(audio: np.ndarray, rng: np.random.Generator | None = None) -> np.ndarray:
+    """Como movil(), pero con eco de una habitación real o simulada y ruido grabado de verdad."""
+    rng = rng or np.random.default_rng()
+    ecos, ruidos = _banco()
+    x = audio.astype(np.float64)
+    # altavoz de la tele
+    graves, agudos = rng.uniform(120, 300), rng.uniform(5000, 7500)
+    x = sosfilt(butter(2, [graves, agudos], btype="band", fs=SR, output="sos"), x)
+    g = rng.uniform(1, 3)
+    x = np.tanh(x * g) / g
+    # habitación (eco real)
+    x = fftconvolve(x, ecos[rng.integers(len(ecos))])[: len(x)]
+    # ruido real de fondo, repetido si es corto, entre 5 y 20 dB por debajo
+    r = ruidos[rng.integers(len(ruidos))]
+    r = np.tile(r, len(x) // len(r) + 1)[: len(x)].astype(np.float64)
+    snr = rng.uniform(5, 20)
+    r *= np.sqrt((x ** 2).mean() / ((r ** 2).mean() + 1e-12) / 10 ** (snr / 10))
+    x = x + r
+    # micrófono del móvil
+    x = sosfilt(butter(2, 100, btype="high", fs=SR, output="sos"), x)
+    return (x / (np.abs(x).max() + 1e-9) * 0.5).astype(np.float32)
