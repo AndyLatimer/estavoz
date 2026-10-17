@@ -126,7 +126,37 @@ def principal_lda():
             print(f"  LDA {dims:>3} dims + {metodo:<10} {a1:5.1f}%  top3 {a3:5.1f}%   ({n} consultas)", flush=True)
 
 
-if __name__ == "__main__" and sys.argv[1:2] == ["lda"]:
+def consultas_movil(modo="normal-onnx", semilla=0):
+    """Rehace las consultas de 8 s de cada clip de eldoblaje como si se grabaran con el móvil."""
+    from simular_movil import movil
+    from voz import SAMPLE_RATE, cargar_audio, huellas
+    cache = RAIZ / "data" / "cache_huellas" / (modo + "-movil")
+    cache.mkdir(parents=True, exist_ok=True)
+    rng = np.random.default_rng(semilla)
+    for f in sorted((RAIZ / "data" / "cache_huellas" / modo).glob("*.npz")):
+        destino = cache / f.name
+        if destino.exists() or "podcast_" in f.name:
+            continue
+        d = np.load(f)
+        actor, nombre = f.stem.split("__")
+        clip = RAIZ / "data" / "actores" / actor / "clips" / f"{nombre}.mp3"
+        audio = cargar_audio(clip, max_seg=90)
+        paso = 8 * SAMPLE_RATE
+        qs = [huellas(movil(audio[i:i + paso], rng)) for i in range(0, max(len(audio) - paso, 1), paso)][:3]
+        np.savez(destino, todo=d["todo"], **{f"q{i}": q for i, q in enumerate(qs) if len(q)})
+
+
+def principal_movil():
+    consultas_movil()
+    for modo, nombre in (("normal-onnx", "audio limpio"), ("normal-onnx-movil", "simulando móvil")):
+        clips = cargar(modo)
+        a1, a3, n = evaluar_lda(clips, dims=192, metodo="centroide", pliegues=5, reg=1e-2)
+        print(f"  {nombre:<16} {a1:5.1f}%  top3 {a3:5.1f}%   ({n} consultas)", flush=True)
+
+
+if __name__ == "__main__" and sys.argv[1:2] == ["movil"]:
+    principal_movil()
+elif __name__ == "__main__" and sys.argv[1:2] == ["lda"]:
     principal_lda()
 elif __name__ == "__main__":
     clips = cargar(sys.argv[1] if len(sys.argv) > 1 else "normal-onnx")
