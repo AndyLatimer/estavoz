@@ -4,13 +4,16 @@ Genera en frontend/:
   datos/lda.bin         media (192) + matriz W (192 x 192) de la LDA, float32
   datos/centroides.bin  huella media de cada actor ya proyectada, float32 (actores x 192)
   datos/actores.json    fichas, en el mismo orden que los centroides
+  datos/busqueda.json   palabra -> actores que la tienen en sus trabajos ("¿Qué estás viendo?")
   fotos/<n>.jpg
 La web no enlaza ni carga nada de fuera.
 Si existe data/respuestas.json (backend/aprender.py), añade las respuestas "¿Acertamos?" que pasen los filtros.
 El índice tiene que estar hecho con ESTAVOZ_ONNX=frontend/modelo/ecapa-int8.onnx.
 """
 import json
+import re
 import shutil
+import unicodedata
 import sys
 from pathlib import Path
 
@@ -19,6 +22,31 @@ import numpy as np
 RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ / "backend"))
 from lda import centroides, entrenar_lda, proyectar  # noqa: E402
+
+
+# palabras que no sirven para buscar una obra
+VACIAS = set("""de del la las el los lo un una unos unas y e o u en a al con por para sin su sus the of and to in on
+at an mi tu se que es temporada serie tv miniserie videojuego capitulo episodio especial parte vol volumen
+pelicula film documental animacion cortometraje version doblaje redoblaje ii iii iv vi vii viii ix""".split())
+
+
+def palabras(texto: str) -> set[str]:
+    t = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode().lower()
+    return {w for w in re.findall(r"[a-z0-9]+", t) if (len(w) >= 3 or w.isdigit()) and w not in VACIAS}
+
+
+def indice_busqueda(slugs, fichas):
+    """palabra -> índices de los actores que la tienen en algún trabajo (título, personaje o actor original)."""
+    indice = {}
+    for i, s in enumerate(slugs):
+        f = RAIZ / "data" / "actores" / s / "trabajos.json"
+        if f.exists():
+            filas = [f"{t['obra']} {t['personaje']} {t['actor_original']}" for t in json.loads(f.read_text(encoding="utf-8"))]
+        else:  # aún sin la lista completa: los trabajos destacados de la ficha
+            filas = fichas[s].get("trabajos", [])
+        for w in set().union(*map(palabras, filas)) if filas else ():
+            indice.setdefault(w, []).append(i)
+    return indice
 
 
 def respuestas_validas(mu, W, C, slugs):
@@ -96,8 +124,11 @@ def main():
             "trabajos": fichas[s].get("trabajos", []),
             "num_trabajos": fichas[s].get("num_trabajos", 0),
         })
+    busqueda = indice_busqueda(slugs, fichas)
+    (salida / "busqueda.json").write_text(json.dumps(busqueda, separators=(",", ":")), encoding="utf-8")
     web = {"dim": int(X.shape[1]), "actores": actores}
     (salida / "actores.json").write_text(json.dumps(web, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    print(f"Búsqueda: {len(busqueda)} palabras, {(salida / 'busqueda.json').stat().st_size >> 10} KB")
     print(f"{len(slugs)} actores (LDA entrenada con {sel.sum()} trozos de "
           f"{sum(v >= 2 for v in n_clips.values())} actores) -> {salida}")
 

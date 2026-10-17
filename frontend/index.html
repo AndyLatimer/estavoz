@@ -60,6 +60,15 @@
   h1 b { color: var(--rojo); font-weight: 600; font-style: italic; }
   .indicacion { font: 400 13px/1.6 var(--mono); color: var(--gris); margin: 14px 0 0; }
 
+  /* pista: ¿qué estás viendo? */
+  .pista { margin-top: 22px; }
+  .pista label { font: 600 11px var(--mono); letter-spacing: .16em; color: var(--gris); display: block; margin-bottom: 8px; }
+  .pista input { width: 100%; padding: 13px 14px; border-radius: 4px; border: 1px solid var(--linea); background: var(--cabina);
+                 color: var(--papel); font: italic 18px var(--serif); outline: none; }
+  .pista input:focus { border-color: var(--gris); }
+  .pista input::placeholder { color: #6f6556; }
+  .pista .nota { font: 11px/1.5 var(--mono); color: var(--gris); margin-top: 6px; min-height: 1.5em; }
+
   /* botón de grabación */
   .escena { position: relative; width: 240px; height: 240px; margin: 34px auto 16px; display: grid; place-items: center; }
   .progreso { position: absolute; inset: 0; transform: rotate(-90deg); }
@@ -152,6 +161,12 @@
 
   <h1>¿Quién pone<br><em>esa voz</em><b>?</b></h1>
   <p class="indicacion">Acerca el móvil a la tele y pulsa el botón rojo.</p>
+
+  <div class="pista">
+    <label for="obra">¿QUÉ ESTÁS VIENDO? <span style="font-weight:400">(OPCIONAL)</span></label>
+    <input id="obra" type="search" autocomplete="off" placeholder="Batman, Walking Dead, Daryl…">
+    <div class="nota" id="notaObra">Si lo escribes, acierta mucho más.</div>
+  </div>
 
   <div class="escena">
     <svg class="progreso" viewBox="0 0 240 240"><circle class="marcas" cx="120" cy="120" r="113"/><circle class="barra" id="aro" cx="120" cy="120" r="117"/></svg>
@@ -272,15 +287,60 @@ function proyectar(q) {
 }
 
 // Parecido medio de los trozos de la grabación con la huella media de cada actor
-function puntuar(consulta, top = 3) {
+// (solo con los candidatos, si se ha dicho qué se está viendo)
+function puntuar(consulta, top = 3, candidatos = null) {
   const qs = consulta.map(proyectar);
-  const lista = actores.map((a, i) => {
+  const indices = candidatos ? [...candidatos] : actores.map((_, i) => i);
+  const lista = indices.map(i => {
     let s = 0;
     for (const q of qs) for (let k = 0, o = i * dim; k < dim; k++) s += q[k] * centroides[o + k];
-    return { ...a, parecido: s / qs.length };
+    return { ...actores[i], parecido: s / qs.length };
   });
   return lista.sort((x, y) => y.parecido - x.parecido).slice(0, top);
 }
+
+// "¿Qué estás viendo?": palabra -> actores con esa palabra en sus trabajos (despliegue/exportar_web.py)
+const VACIAS = new Set(`de del la las el los lo un una unos unas y e o u en a al con por para sin su sus the of and to in on
+at an mi tu se que es temporada serie tv miniserie videojuego capitulo episodio especial parte vol volumen
+pelicula film documental animacion cortometraje version doblaje redoblaje ii iii iv vi vii viii ix`.split(/\s+/));
+let busqueda = null;
+const cargarBusqueda = () => busqueda ??= fetch('datos/busqueda.json').then(r => r.json());
+
+function palabras(texto) {
+  const t = texto.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  return [...new Set(t.match(/[a-z0-9]+/g) || [])].filter(w => (w.length >= 3 || /^\d+$/.test(w)) && !VACIAS.has(w));
+}
+
+// Actores que tienen todas las palabras (la última puede estar a medio escribir)
+async function candidatosPara(texto) {
+  const ws = palabras(texto);
+  if (!ws.length) return null;
+  const indice = await cargarBusqueda();
+  let total = null;
+  for (const [n, w] of ws.entries()) {
+    let ids = indice[w];
+    if (!ids && n === ws.length - 1) {
+      ids = [...new Set(Object.keys(indice).filter(k => k.startsWith(w)).flatMap(k => indice[k]))];
+    }
+    const conjunto = new Set(ids || []);
+    total = total ? new Set([...total].filter(i => conjunto.has(i))) : conjunto;
+  }
+  return total;
+}
+
+const obra = $('obra'), notaObra = $('notaObra');
+let pistaTimer;
+obra.addEventListener('focus', cargarBusqueda, { once: true });
+obra.addEventListener('input', () => {
+  clearTimeout(pistaTimer);
+  pistaTimer = setTimeout(async () => {
+    if (!obra.value.trim()) { notaObra.textContent = 'Si lo escribes, acierta mucho más.'; return; }
+    const c = await candidatosPara(obra.value);
+    notaObra.textContent = !c ? 'Escribe un poco más…'
+      : c.size ? `Buscaré entre ${c.size} ${c.size === 1 ? 'voz' : 'voces'} de «${obra.value.trim()}».`
+      : `No encuentro «${obra.value.trim()}»: buscaré entre todas las voces.`;
+  }, 250);
+});
 
 const PILOTO = { grabando: 'GRABANDO', analizando: 'ANALIZANDO' };
 function modo(m) { sala.className = m || ''; $('piloto').textContent = PILOTO[m] || 'EN SILENCIO'; }
@@ -293,7 +353,9 @@ async function identificar(blob) {
     const consulta = await huellasDe(await a16k(blob));
     if (!consulta.length) throw new Error('corto');
     ultimaConsulta = consulta;
-    pintar(puntuar(consulta));
+    const candidatos = await candidatosPara(obra.value);
+    ultimaPista = candidatos && candidatos.size ? { texto: obra.value.trim(), n: candidatos.size } : null;
+    pintar(puntuar(consulta, 3, ultimaPista ? candidatos : null));
   } catch (e) {
     console.error(e);
     estado.textContent = e.message === 'corto' ? 'Toma muy corta: necesito al menos 3 segundos.' : 'No he podido leer ese audio.';
@@ -378,7 +440,7 @@ function papel(t) {
   return m ? { personaje: m[1], obra: m[2], anio: m[3] } : { personaje: t, obra: '', anio: '' };
 }
 
-let ultimo, ultimaConsulta;
+let ultimo, ultimaConsulta, ultimaPista;
 const CONFIG = window.ESTAVOZ_CONFIG || {};
 
 // "¿Acertamos?": se guarda solo la huella de voz (unos números), nunca el audio.
@@ -433,6 +495,7 @@ function pintar(lista) {
   res.innerHTML = `
     <article class="ficha principal">
       <div class="rotulo"><span>TOMA ${String(toma).padStart(2, '0')}</span><span>ESTA VOZ ES DE</span></div>
+      ${ultimaPista ? `<div class="dato" style="margin-top:6px">ENTRE ${ultimaPista.n} ${ultimaPista.n === 1 ? 'VOZ' : 'VOCES'} DE «${esc(ultimaPista.texto.toUpperCase())}»</div>` : ''}
       <div class="quien">
         ${foto(top)}
         <div>
