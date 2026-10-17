@@ -33,7 +33,7 @@ def main():
     if len(sys.argv) != 2 or "HF_TOKEN" not in os.environ:
         sys.exit(__doc__)
     repo = sys.argv[1]
-    for f in ("modelo/ecapa-int8.onnx", "datos/huellas.bin", "datos/actores.json"):
+    for f in ("modelo/ecapa-int8.onnx", "datos/lda.bin", "datos/centroides.bin", "datos/actores.json"):
         if not (WEB / f).exists():
             sys.exit(f"Falta frontend/{f}")
 

@@ -28,7 +28,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--separar", action="store_true")
     separar = p.parse_args().separar
-    vectores, etiquetas, fichas = [], [], {}
+    vectores, etiquetas, clips_id, fichas = [], [], [], {}
     for carpeta in sorted(p for p in ACTORES.iterdir() if p.is_dir()):
         ficha_path = carpeta / "ficha.json"
         if not ficha_path.exists():
@@ -43,6 +43,7 @@ def main():
                 continue
             vectores.append(h)
             etiquetas += [carpeta.name] * len(h)
+            clips_id += [f"{carpeta.name}/{clip.name}"] * len(h)
             n += len(h)
         if n:
             fichas[carpeta.name] = json.loads(ficha_path.read_text(encoding="utf-8"))
@@ -50,7 +51,8 @@ def main():
 
     if not vectores:
         sys.exit("No hay clips que indexar en data/actores/")
-    np.savez(SALIDA, vectores=np.concatenate(vectores), etiquetas=np.array(etiquetas), separado=separar)
+    np.savez(SALIDA, vectores=np.concatenate(vectores), etiquetas=np.array(etiquetas),
+             clips=np.array(clips_id), separado=separar)
     (RAIZ / "data" / "fichas.json").write_text(json.dumps(fichas, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"Índice guardado: {len(fichas)} actores, {len(etiquetas)} trozos")
 

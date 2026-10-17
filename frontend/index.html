@@ -185,7 +185,7 @@ const codigo = seg => {
   return `00:00:${d(Math.floor(f / FPS))}:${d(f % FPS)}`;
 };
 
-let sesion, huellas, etiquetas, actores, dim;
+let sesion, ldaMu, ldaW, centroides, actores, dim;
 
 // Descarga con barra de progreso (el modelo pesa ~22 MB la primera vez)
 async function descargar(url, alAvanzar) {
@@ -205,14 +205,16 @@ async function descargar(url, alAvanzar) {
 async function cargar() {
   const barra = $('carga').firstElementChild;
   try {
-    const [modelo, bin, meta] = await Promise.all([
+    const [modelo, lda, cent, meta] = await Promise.all([
       descargar('modelo/ecapa-int8.onnx', p => { barra.style.width = `${p * 100}%`; estado.textContent = `Preparando la sala… ${Math.round(p * 100)}%`; }),
-      fetch('datos/huellas.bin').then(r => r.arrayBuffer()),
+      fetch('datos/lda.bin').then(r => r.arrayBuffer()),
+      fetch('datos/centroides.bin').then(r => r.arrayBuffer()),
       fetch('datos/actores.json').then(r => r.json()),
     ]);
     sesion = await ort.InferenceSession.create(modelo);
-    huellas = new Float32Array(bin); dim = meta.dim;
-    etiquetas = Int32Array.from(meta.etiquetas); actores = meta.actores;
+    dim = meta.dim; actores = meta.actores;
+    ldaMu = new Float32Array(lda, 0, dim); ldaW = new Float32Array(lda, dim * 4);
+    centroides = new Float32Array(cent);
     $('carga').remove();
     estado.textContent = 'Sala lista. Cuando quieras.';
     btn.disabled = false;
@@ -245,29 +247,25 @@ async function huellasDe(audio) {
   return out;
 }
 
-// Misma puntuación que backend/app.py: parecido medio con cada huella del índice,
-// y por actor la media de sus 3 huellas más parecidas.
+// Proyección LDA (despliegue/exportar_web.py): quita de la huella lo que depende de la
+// grabación (música, micro, compresión) y deja lo que depende de la persona.
+function proyectar(q) {
+  const p = new Float32Array(dim);
+  for (let i = 0; i < dim; i++) {
+    const x = q[i] - ldaMu[i], o = i * dim;
+    for (let j = 0; j < dim; j++) p[j] += x * ldaW[o + j];
+  }
+  const n = Math.hypot(...p);
+  return p.map(v => v / n);
+}
+
+// Parecido medio de los trozos de la grabación con la huella media de cada actor
 function puntuar(consulta, top = 3) {
-  const filas = etiquetas.length, sims = new Float32Array(filas);
-  for (let f = 0; f < filas; f++) {
+  const qs = consulta.map(proyectar);
+  const lista = actores.map((a, i) => {
     let s = 0;
-    for (const q of consulta) {
-      let d = 0; const o = f * dim;
-      for (let k = 0; k < dim; k++) d += q[k] * huellas[o + k];
-      s += d;
-    }
-    sims[f] = s / consulta.length;
-  }
-  const porActor = new Map();
-  for (let f = 0; f < filas; f++) {
-    const a = etiquetas[f];
-    if (!porActor.has(a)) porActor.set(a, []);
-    porActor.get(a).push(sims[f]);
-  }
-  const lista = [...porActor].map(([a, s]) => {
-    s.sort((x, y) => y - x);
-    const mejores = s.slice(0, 3);
-    return { ...actores[a], parecido: mejores.reduce((x, y) => x + y, 0) / mejores.length };
+    for (const q of qs) for (let k = 0, o = i * dim; k < dim; k++) s += q[k] * centroides[o + k];
+    return { ...a, parecido: s / qs.length };
   });
   return lista.sort((x, y) => y.parecido - x.parecido).slice(0, top);
 }
@@ -349,8 +347,9 @@ $('fichero').onchange = e => {
 };
 
 // El parecido del modelo (coseno) no es un porcentaje; esto lo traduce a algo legible.
-// Calibrado con clips reales de doblaje: la misma voz suele dar > 0.65, voces distintas < 0.5.
-const aPorcentaje = s => Math.round(Math.max(0, Math.min(1, (s - 0.35) / 0.4)) * 100);
+// Calibrado con 2.051 pruebas sobre clips de doblaje: con el mejor >= 0.325 (50 %) acierta
+// ~9 de cada 10 veces, con >= 0.35 el 95 % y con >= 0.5 (100 %) prácticamente siempre.
+const aPorcentaje = s => Math.round(Math.max(0, Math.min(1, (s - 0.15) / 0.35)) * 100);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 function foto(a, peq = false) {
