@@ -11,9 +11,11 @@
 <link rel="apple-touch-icon" href="icono-192.png">
 <meta property="og:title" content="Estavoz · ¿Quién pone esa voz?">
 <meta property="og:description" content="El Shazam de los actores de doblaje.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400;1,9..144,600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<meta property="og:image" content="https://srharrison-estavoz.static.hf.space/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="fuentes/fuentes.css">
 <style>
   :root {
     --tinta: #14110f;      /* negro cálido de cabina */
@@ -135,6 +137,7 @@
   .pregunta input { flex: 1; min-width: 0; cursor: text; letter-spacing: 0; font-weight: 400; }
   .pregunta .nota { font: 11px/1.5 var(--mono); color: var(--gris); margin-top: 10px; }
   .pregunta .gracias { font-style: italic; font-size: 17px; }
+  footer a { color: var(--gris); text-underline-offset: 3px; }
   footer { margin-top: auto; padding-top: 40px; font: 11px/1.6 var(--mono); color: var(--gris); text-align: center; letter-spacing: .04em; }
 
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
@@ -169,11 +172,11 @@
 
   <section id="resultados" aria-live="polite"></section>
 
-  <footer>El audio se analiza en tu móvil<br>y nunca sale de él</footer>
+  <footer>El audio se analiza en tu móvil<br>y nunca sale de él · <a href="privacidad.html">Privacidad</a></footer>
 </main>
 
 <script src="config.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.wasm.min.js"></script>
+<script src="lib/ort.wasm.min.js"></script>
 <script>
 const SR = 16000, SEGUNDOS = 10, FPS = 25;
 const TROZO = 6 * SR, TROZO_MIN = 2 * SR, MAX_CONSULTA = 20 * SR;  // igual que backend/voz.py
@@ -182,7 +185,7 @@ const btn = $('btn'), estado = $('estado'), res = $('resultados'), sala = $('sal
 const ARO = 2 * Math.PI * 117;
 let toma = 0;
 
-ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/';
+ort.env.wasm.wasmPaths = new URL('lib/', location.href).href;  // onnxruntime-web 1.20.1, servido desde nuestra web
 ort.env.wasm.numThreads = 1;
 
 const leds = [];
@@ -384,7 +387,7 @@ function pregunta(otros) {
   return `<div class="pregunta" id="pregunta">
     <div class="rotulo"><span>¿ACERTAMOS?</span></div>
     <div class="fila"><button onclick="responder(true)">Sí, es esa voz</button><button onclick="mostrarOtros()">No</button></div>
-    <div class="nota">Si respondes, guardamos una huella anónima de la voz (nunca el audio) para que Estavoz aprenda.</div>
+    <div class="nota">Si respondes, guardamos una huella anónima de la voz (nunca el audio) para que Estavoz aprenda. <a href="privacidad.html" style="color:inherit">Más info</a></div>
   </div>`;
 }
 

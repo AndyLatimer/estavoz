@@ -10,3 +10,4 @@ demucs
 onnx
 onnxruntime
 huggingface_hub
+scipy

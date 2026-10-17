@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Privacidad · Estavoz</title>
+<meta name="description" content="Qué datos trata Estavoz y cómo.">
+<meta name="theme-color" content="#14110f">
+<link rel="icon" href="icono.svg" type="image/svg+xml">
+<link rel="stylesheet" href="fuentes/fuentes.css">
+<style>
+  :root { --tinta: #14110f; --cabina: #1d1915; --linea: rgba(243,234,216,.12); --papel: #f3ead8; --gris: #a69a86; --rojo: #e5322d;
+          --serif: Fraunces, Georgia, serif; --mono: "JetBrains Mono", ui-monospace, monospace; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--tinta); color: var(--papel); font: 17px/1.6 var(--serif); }
+  main { max-width: 640px; margin: 0 auto; padding: 24px 16px 60px; }
+  .barra-sup { display: flex; justify-content: space-between; align-items: center; padding-bottom: 14px; border-bottom: 1px solid var(--linea); }
+  .marca { font-size: 26px; font-style: italic; font-weight: 600; color: var(--papel); text-decoration: none; }
+  .marca b { color: var(--rojo); font-style: normal; }
+  .volver { font: 600 11px var(--mono); letter-spacing: .14em; color: var(--gris); text-decoration: none; }
+  h1 { font-weight: 400; font-size: 40px; line-height: 1.05; margin: 32px 0 8px; }
+  h2 { font: 600 12px var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--gris); margin: 34px 0 6px; }
+  p, li { color: var(--papel); }
+  .fecha { font: 12px var(--mono); color: var(--gris); }
+  a { color: var(--papel); text-underline-offset: 3px; }
+  .caja { background: var(--cabina); border: 1px solid var(--linea); border-left: 3px solid var(--rojo); border-radius: 6px; padding: 14px 18px; margin-top: 20px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="barra-sup">
+    <a class="marca" href="./">estavoz<b>.</b></a>
+    <a class="volver" href="./">← VOLVER</a>
+  </div>
+
+  <h1>Privacidad</h1>
+  <div class="fecha">ÚLTIMA ACTUALIZACIÓN: 17 DE OCTUBRE DE 2026</div>
+
+  <div class="caja">En corto: <b>el audio que grabas no sale nunca de tu dispositivo</b>. Solo si respondes a «¿Acertamos?»
+    se guarda una huella numérica anónima de la voz, sin el audio, para que Estavoz aprenda.</div>
+
+  <h2>Quién es el responsable</h2>
+  <p>Estavoz es un proyecto personal. Para cualquier cuestión sobre tus datos puedes escribir a
+    <a href="mailto:CORREO_DE_CONTACTO">CORREO_DE_CONTACTO</a>.</p>
+
+  <h2>Qué hace Estavoz con el micrófono</h2>
+  <p>Cuando pulsas el botón, el navegador graba 10 segundos. Esa grabación se analiza <b>en tu propio dispositivo</b>:
+    se calcula una «huella de voz» (una lista de 192 números) y se compara con las de los actores de doblaje que
+    vienen incluidas en la web. La grabación no se envía a ningún servidor y se descarta al terminar.
+    Lo mismo ocurre si subes un archivo de audio.</p>
+
+  <h2>Qué se guarda si respondes a «¿Acertamos?»</h2>
+  <p>Responder es voluntario. Si respondes, se envía a nuestra base de datos:</p>
+  <ul>
+    <li>la huella de voz de la grabación (los números, <b>no el audio</b>; a partir de ella no se puede reconstruir lo que se oyó),</li>
+    <li>qué actor propuso Estavoz, si acertó y, si nos lo dices, quién era,</li>
+    <li>la fecha y hora.</li>
+  </ul>
+  <p>No guardamos tu nombre, tu correo ni ningún identificador tuyo. Usamos estas respuestas solo para mejorar el
+    reconocimiento de voces, y las conservamos mientras exista el proyecto. Como son anónimas, no podemos saber
+    cuáles son tuyas; si aun así quieres que borremos algo, escríbenos indicando la fecha y hora aproximadas.</p>
+  <p>La base de nuestras respuestas es tu consentimiento, que das al pulsar una respuesta. Puedes simplemente no responder.</p>
+
+  <h2>Servicios que intervienen</h2>
+  <ul>
+    <li><b>Hugging Face</b> aloja la web. Como cualquier servidor web, puede registrar datos técnicos de la conexión (por ejemplo, la dirección IP) para su funcionamiento y seguridad.</li>
+    <li><b>Supabase</b> aloja la base de datos de respuestas. Al enviar una respuesta, también puede registrar datos técnicos de la conexión.</li>
+  </ul>
+  <p>La web no carga fuentes, librerías ni contenidos de otros servidores.</p>
+
+  <h2>Cookies</h2>
+  <p>Estavoz no usa cookies propias ni de terceros. El navegador puede guardar en caché los archivos de la web
+    (por ejemplo, el modelo de voz) para que cargue más rápido la próxima vez.</p>
+
+  <h2>Tus derechos</h2>
+  <p>Puedes pedir acceso, rectificación o supresión de tus datos escribiendo al correo de contacto, y también
+    reclamar ante la Agencia Española de Protección de Datos (<a href="https://www.aepd.es" rel="noopener">aepd.es</a>).</p>
+
+  <h2>Los nombres que aparecen</h2>
+  <p>Estavoz muestra nombres de profesionales del doblaje y algunos de sus trabajos públicos. Si eres uno de ellos
+    y quieres que corrijamos o retiremos tu información, escríbenos y lo haremos.</p>
+</main>
+</body>
+</html>

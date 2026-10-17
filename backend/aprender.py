@@ -20,6 +20,7 @@ def main():
     url, clave = os.environ.get("SUPABASE_URL"), os.environ.get("SUPABASE_SERVICE_KEY")
     if not (url and clave):
         sys.exit(__doc__)
+    url = url.rstrip("/").removesuffix("/rest/v1")
     cab = {"apikey": clave, "Authorization": f"Bearer {clave}"}
     filas, desde = [], 0
     while True:

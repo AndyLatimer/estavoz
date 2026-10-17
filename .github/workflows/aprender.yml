@@ -1,0 +1,52 @@
+# Cada noche: recoge las respuestas "¿Acertamos?" de Supabase, las incorpora a las
+# huellas de los dobladores (con filtros contra respuestas falsas) y publica la web.
+#
+# Secretos necesarios (Settings -> Secrets and variables -> Actions):
+#   HF_TOKEN               token de escritura de Hugging Face
+#   SUPABASE_URL           https://xxxx.supabase.co
+#   SUPABASE_SERVICE_KEY   clave secreta de Supabase (sb_secret_...)
+# Variables (pestaña Variables):
+#   HF_SPACE   p. ej. SrHarrison/estavoz
+#   HF_DATOS   p. ej. SrHarrison/estavoz-datos
+
+name: Aprender de las respuestas
+
+on:
+  schedule:
+    - cron: "17 3 * * *"   # 03:17 UTC
+  workflow_dispatch:
+
+jobs:
+  aprender:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias
+        # solo combina huellas ya calculadas con las respuestas: no hace falta el modelo de audio
+        run: pip install numpy scipy requests huggingface_hub
+
+      - name: Bajar datos (copia privada) y modelo
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python despliegue/copia_datos.py "${{ vars.HF_DATOS }}" bajar
+          python -c "from huggingface_hub import hf_hub_download as d; import os, shutil; os.makedirs('frontend/modelo', exist_ok=True); shutil.copy(d('${{ vars.HF_SPACE }}', 'modelo/ecapa-int8.onnx', repo_type='space', token=os.environ['HF_TOKEN']), 'frontend/modelo/ecapa-int8.onnx')"
+
+      - name: Recoger respuestas
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python backend/aprender.py
+
+      - name: Rehacer los datos de la web y publicar
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python despliegue/exportar_web.py
+          python despliegue/subir_a_huggingface.py "${{ vars.HF_SPACE }}"

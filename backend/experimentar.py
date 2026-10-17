@@ -187,7 +187,35 @@ def principal_aumentado():
         print(f"  con aumento, {nombre:<16} {a1:5.1f}%  top3 {a3:5.1f}%   ({n} consultas)", flush=True)
 
 
-if __name__ == "__main__" and sys.argv[1:2] == ["aumentado"]:
+def principal_duracion():
+    """¿Cuánto ayuda grabar más? Consultas de móvil simulado de 10 y 15 s, con el índice aumentado."""
+    from simular_movil import movil
+    from voz import SAMPLE_RATE, cargar_audio, huellas
+    base = cargar("normal-onnx")
+    aum = cargar("normal-onnx-aumentado")
+    nombres = sorted(f for f in (RAIZ / "data" / "cache_huellas" / "normal-onnx").glob("*.npz") if np.load(f)["todo"].size)
+    for seg in (10, 15):
+        cache = RAIZ / "data" / "cache_huellas" / f"movil-{seg}s"
+        cache.mkdir(exist_ok=True)
+        rng = np.random.default_rng(seg)
+        clips = []
+        for (a, t, _), f in zip(base, nombres):
+            destino = cache / f.name
+            if not destino.exists():
+                actor, nombre = f.stem.split("__")
+                audio = cargar_audio(RAIZ / "data" / "actores" / actor / "clips" / f"{nombre}.mp3", max_seg=90)
+                paso = seg * SAMPLE_RATE
+                qs = [huellas(movil(audio[i:i + paso], rng)) for i in range(0, max(len(audio) - paso, 1), paso)][:2]
+                np.savez(destino, **{f"q{i}": q for i, q in enumerate(qs) if len(q)})
+            d = np.load(destino)
+            clips.append((a, t, [d[k] for k in d.files]))
+        a1, a3, n = evaluar_lda(combinar(clips, aum), dims=192, metodo="centroide", pliegues=5, reg=1e-2)
+        print(f"  móvil simulado, grabando {seg} s: {a1:5.1f}%  top3 {a3:5.1f}%   ({n} consultas)", flush=True)
+
+
+if __name__ == "__main__" and sys.argv[1:2] == ["duracion"]:
+    principal_duracion()
+elif __name__ == "__main__" and sys.argv[1:2] == ["aumentado"]:
     principal_aumentado()
 elif __name__ == "__main__" and sys.argv[1:2] == ["movil"]:
     principal_movil()
