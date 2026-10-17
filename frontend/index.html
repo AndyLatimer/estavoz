@@ -22,7 +22,8 @@
   #subir label { color:var(--acc); cursor:pointer; text-decoration:underline; }
   #resultados { width:100%; max-width:480px; display:grid; gap:12px; }
   .card { background:var(--card); border-radius:14px; padding:14px; display:flex; gap:14px; }
-  .card img { width:72px; height:72px; object-fit:cover; border-radius:10px; background:#333; flex-shrink:0; }
+  .card img, .inicial { width:72px; height:72px; object-fit:cover; border-radius:10px; background:#333; flex-shrink:0; }
+  .inicial { display:flex; align-items:center; justify-content:center; font-size:30px; font-weight:700; color:var(--sub); }
   .card h2 { margin:0; font-size:18px; }
   .pct { color:var(--acc); font-weight:700; }
   .card ul { margin:6px 0; padding-left:18px; color:var(--sub); font-size:14px; }
@@ -168,14 +169,16 @@ document.getElementById('fichero').onchange = e => {
 };
 
 // El parecido del modelo (coseno) no es un porcentaje; esto lo traduce a algo legible.
-const aPorcentaje = s => Math.round(Math.max(0, Math.min(1, (s - 0.15) / 0.55)) * 100);
+// Calibrado con los clips de eldoblaje: la misma voz suele dar > 0.65, voces distintas < 0.5.
+const aPorcentaje = s => Math.round(Math.max(0, Math.min(1, (s - 0.35) / 0.4)) * 100);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 function pintar(lista) {
   estado.textContent = aPorcentaje(lista[0].parecido) >= 50 ? '¡Te lo tengo!' : 'No estoy muy seguro… ¿será alguno de estos?';
   res.innerHTML = lista.map((a, i) => `
     <div class="card ${i === 0 ? 'principal' : ''}">
-      <img src="${esc(a.foto)}" alt="" onerror="this.style.visibility='hidden'">
+      ${a.foto ? `<img src="${esc(a.foto)}" alt="" onerror="this.outerHTML='<div class=inicial>${esc(a.nombre[0])}</div>'">`
+               : `<div class="inicial">${esc(a.nombre[0])}</div>`}
       <div>
         <h2>${esc(a.nombre)} <span class="pct">${aPorcentaje(a.parecido)}%</span></h2>
         ${a.trabajos?.length ? `<ul>${a.trabajos.slice(0, 5).map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
