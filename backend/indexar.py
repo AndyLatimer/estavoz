@@ -6,6 +6,8 @@ Estructura esperada:
 
 Uso: .venv/bin/python backend/indexar.py [--separar] [--nuevos]
   --nuevos solo calcula los clips que aún no están en el índice y los añade
+  --aumentar añade también, por cada clip, sus huellas como si se hubiera grabado con el móvil
+             delante de la tele (backend/simular_movil.py); su clip se marca con "#movil"
   --separar quita música y efectos con Demucs (más lento, más acierto con audio de películas)
 """
 import argparse
@@ -16,6 +18,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from simular_movil import movil  # noqa: E402
 from voz import cargar_audio, huellas  # noqa: E402
 
 RAIZ = Path(__file__).resolve().parent.parent
@@ -29,6 +32,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--separar", action="store_true")
     p.add_argument("--nuevos", action="store_true")
+    p.add_argument("--aumentar", action="store_true")
     args = p.parse_args()
     separar = args.separar
     hechos = set()
@@ -37,6 +41,7 @@ def main():
         assert bool(previo["separado"]) == separar, "el índice existente se hizo con otro modo"
         hechos = set(previo["clips"])
     vectores, etiquetas, clips_id, fichas = [], [], [], {}
+    rng = np.random.default_rng(1)
     for carpeta in sorted(p for p in ACTORES.iterdir() if p.is_dir()):
         ficha_path = carpeta / "ficha.json"
         if not ficha_path.exists():
@@ -48,7 +53,8 @@ def main():
                 n += 1  # ya estaba en el índice
                 continue
             try:
-                h = huellas(cargar_audio(clip, separar=separar, max_seg=MAX_SEG))
+                audio = cargar_audio(clip, separar=separar, max_seg=MAX_SEG)
+                h = huellas(audio)
             except Exception as e:  # clip roto: seguimos con el resto
                 print(f"  ! {clip.name}: {e}")
                 continue
@@ -56,6 +62,11 @@ def main():
             etiquetas += [carpeta.name] * len(h)
             clips_id += [f"{carpeta.name}/{clip.name}"] * len(h)
             n += len(h)
+            if args.aumentar:
+                hm = huellas(movil(audio, rng))
+                vectores.append(hm)
+                etiquetas += [carpeta.name] * len(hm)
+                clips_id += [f"{carpeta.name}/{clip.name}#movil"] * len(hm)
         if n:
             fichas[carpeta.name] = json.loads(ficha_path.read_text(encoding="utf-8"))
         print(f"{carpeta.name}: {len(clips)} clips, {n} trozos")

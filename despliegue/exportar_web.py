@@ -56,7 +56,8 @@ def main():
     slugs = sorted(fichas)
 
     # la LDA aprende de los actores con 2+ clips (misma voz en grabaciones distintas)
-    n_clips = {a: len(set(clips[y == a])) for a in slugs}
+    base = np.array([c.split("#")[0] for c in clips])  # "x.mp3#movil" es el mismo clip que "x.mp3"
+    n_clips = {a: len(set(base[y == a])) for a in slugs}
     sel = np.isin(y, [a for a in slugs if n_clips[a] >= 2])
     mu, W = entrenar_lda(X[sel], y[sel])
     C = centroides(proyectar(X, mu, W), y, slugs)
