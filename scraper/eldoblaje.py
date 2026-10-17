@@ -21,7 +21,7 @@ import requests
 from bs4 import BeautifulSoup
 
 BASE = "https://www.eldoblaje.com/datos/"
-PAUSA_SEG = 1.0
+PAUSA_SEG = 0.7
 LETRAS = list("abcdefghijklmnopqrstuvwxyz") + ["ñ", "num"]
 CARPETAS_AUDIO = ["Muestras", "Saludos", "Muestras3", "Muestras4"]
 MAX_TRABAJOS = 15
@@ -200,26 +200,32 @@ def trabajos_de_obra(sopa: BeautifulSoup) -> list[dict]:
     return out
 
 
-def trabajos():
-    """Todas las páginas de trabajos de cada actor que tiene voz (data/actores/*/trabajos.json)."""
-    carpetas = sorted(f.parent for f in ACTORES.glob("*/ficha.json"))
-    for n, carpeta in enumerate(carpetas, 1):
-        destino = carpeta / "trabajos.json"
-        if destino.exists():
-            continue
-        id_ = carpeta.name.split("-")[0]
-        todos, pag, total = [], 1, 1
-        while pag <= total:
-            sopa = html(f"{BASE}FichaActorDoblaje.asp?id={id_}&pag={pag}&orden=")
-            if sopa is None:
-                break
-            todos += trabajos_de_obra(sopa)
-            paginas = [int(m) for m in re.findall(rf"FichaActorDoblaje\.asp\?id={id_}&(?:amp;)?pag=(\d+)", str(sopa))]
-            total = max(paginas, default=1)
-            pag += 1
-        else:
-            destino.write_text(json.dumps(todos, ensure_ascii=False), encoding="utf-8")
-        print(f"[{n}/{len(carpetas)}] {carpeta.name}: {len(todos)} trabajos en {total} páginas")
+def trabajos(hilos: int = 2):
+    """Todas las páginas de trabajos de cada actor que tiene voz (data/actores/*/trabajos.json).
+
+    Dos descargas a la vez (cada una con su pausa entre páginas): unas 2-3 páginas por segundo.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    carpetas = [f.parent for f in sorted(ACTORES.glob("*/ficha.json")) if not (f.parent / "trabajos.json").exists()]
+    with ThreadPoolExecutor(hilos) as ex:
+        list(ex.map(lambda nc: trabajos_actor(*nc, len(carpetas)), enumerate(carpetas, 1)))
+
+
+def trabajos_actor(n: int, carpeta: Path, total_actores: int):
+    destino = carpeta / "trabajos.json"
+    id_ = carpeta.name.split("-")[0]
+    todos, pag, total = [], 1, 1
+    while pag <= total:
+        sopa = html(f"{BASE}FichaActorDoblaje.asp?id={id_}&pag={pag}&orden=")
+        if sopa is None:
+            break
+        todos += trabajos_de_obra(sopa)
+        paginas = [int(m) for m in re.findall(rf"FichaActorDoblaje\.asp\?id={id_}&(?:amp;)?pag=(\d+)", str(sopa))]
+        total = max(paginas, default=1)
+        pag += 1
+    else:
+        destino.write_text(json.dumps(todos, ensure_ascii=False), encoding="utf-8")
+    print(f"[{n}/{total_actores}] {carpeta.name}: {len(todos)} trabajos en {total} páginas", flush=True)
 
 
 def fichas(maximo: int | None):
