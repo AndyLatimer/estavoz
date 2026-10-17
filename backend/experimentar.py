@@ -40,8 +40,8 @@ def preparar(clips, centrar):
     V = normaliza(V - mu)
     consultas = []  # (clip, actor, huellas de la consulta)
     por_actor = defaultdict(int)
-    for a, _, _ in clips:
-        por_actor[a] += 1
+    for a, _, qs in clips:
+        por_actor[a] += bool(qs)  # solo cuentan los clips de los que salen consultas (eldoblaje)
     for i, (a, _, qs) in enumerate(clips):
         if por_actor[a] < 2:
             continue

@@ -34,7 +34,7 @@ def huellas_clip(clip: Path) -> tuple[np.ndarray, list[np.ndarray]]:
     todo = huellas(audio)
     paso = CONSULTA_SEG * SAMPLE_RATE
     inicios = range(0, max(len(audio) - paso, 1), paso)
-    consultas = [huellas(audio[i:i + paso]) for i in list(inicios)[:3]]
+    consultas = [] if clip.name.startswith("podcast_") else [huellas(audio[i:i + paso]) for i in list(inicios)[:3]]
     consultas = [c for c in consultas if len(c)]
     cache.parent.mkdir(parents=True, exist_ok=True)
     np.savez(cache, todo=todo, **{f"q{i}": c for i, c in enumerate(consultas)})
@@ -59,7 +59,8 @@ def main():
 
     clips = []  # (actor, huellas_todo, consultas)
     for n, c in enumerate(carpetas, 1):
-        for clip in sorted((c / "clips").glob("*.mp3")):
+        # los clips de podcast (.wav) entran en la base de voces; las consultas salen solo de los de eldoblaje
+        for clip in sorted(list((c / "clips").glob("*.mp3")) + list((c / "clips").glob("podcast_*.wav"))):
             try:
                 todo, qs = huellas_clip(clip)
             except Exception as e:

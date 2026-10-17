@@ -4,7 +4,8 @@ Estructura esperada:
   data/actores/<slug>/ficha.json   {"nombre": ..., "url": ..., "foto": ..., "trabajos": [...]}
   data/actores/<slug>/clips/*.mp3  (o wav, m4a, ogg...)
 
-Uso: .venv/bin/python backend/indexar.py [--separar]
+Uso: .venv/bin/python backend/indexar.py [--separar] [--nuevos]
+  --nuevos solo calcula los clips que aún no están en el índice y los añade
   --separar quita música y efectos con Demucs (más lento, más acierto con audio de películas)
 """
 import argparse
@@ -27,7 +28,14 @@ EXT_AUDIO = {".mp3", ".wav", ".m4a", ".ogg", ".webm", ".flac", ".aac"}
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--separar", action="store_true")
-    separar = p.parse_args().separar
+    p.add_argument("--nuevos", action="store_true")
+    args = p.parse_args()
+    separar = args.separar
+    hechos = set()
+    if args.nuevos and SALIDA.exists():
+        previo = np.load(SALIDA)
+        assert bool(previo["separado"]) == separar, "el índice existente se hizo con otro modo"
+        hechos = set(previo["clips"])
     vectores, etiquetas, clips_id, fichas = [], [], [], {}
     for carpeta in sorted(p for p in ACTORES.iterdir() if p.is_dir()):
         ficha_path = carpeta / "ficha.json"
@@ -36,6 +44,9 @@ def main():
         clips = [c for c in sorted((carpeta / "clips").glob("*")) if c.suffix.lower() in EXT_AUDIO]
         n = 0
         for clip in clips:
+            if f"{carpeta.name}/{clip.name}" in hechos:
+                n += 1  # ya estaba en el índice
+                continue
             try:
                 h = huellas(cargar_audio(clip, separar=separar, max_seg=MAX_SEG))
             except Exception as e:  # clip roto: seguimos con el resto
@@ -49,6 +60,10 @@ def main():
             fichas[carpeta.name] = json.loads(ficha_path.read_text(encoding="utf-8"))
         print(f"{carpeta.name}: {len(clips)} clips, {n} trozos")
 
+    if hechos:  # añadir a lo que ya había
+        vectores.insert(0, previo["vectores"])
+        etiquetas = list(previo["etiquetas"]) + etiquetas
+        clips_id = list(previo["clips"]) + clips_id
     if not vectores:
         sys.exit("No hay clips que indexar en data/actores/")
     np.savez(SALIDA, vectores=np.concatenate(vectores), etiquetas=np.array(etiquetas),
