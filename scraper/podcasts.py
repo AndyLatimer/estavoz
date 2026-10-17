@@ -144,10 +144,12 @@ def extraer(umbral: float, max_seg: int):
     C = centroides(proyectar(X, mu, W), y, slugs)
     pos = {s: i for i, s in enumerate(slugs)}
 
+    hechos_f = DIR / "analizados.json"
+    hechos = set(json.loads(hechos_f.read_text())) if hechos_f.exists() else set()
     for mp3 in sorted((DIR / "audio").glob("*.mp3")):
         slug = mp3.stem.split("__")[0]
         destino = ACTORES / slug / "clips" / f"podcast_{mp3.stem.split('__')[1]}.wav"
-        if destino.exists() or slug not in pos:
+        if destino.exists() or mp3.name in hechos or slug not in pos:
             continue
         audio = cargar_audio(mp3, max_seg=max_seg)
         h = huellas(audio)                      # una huella cada 6 s
@@ -161,6 +163,8 @@ def extraer(umbral: float, max_seg: int):
         print(f"{mp3.name}: {buenos.sum()}/{len(h)} trozos son de {slug} ({len(voz_suya) / SAMPLE_RATE:.0f} s)")
         if buenos.sum() >= 3:
             sf.write(destino, voz_suya[: 90 * SAMPLE_RATE], SAMPLE_RATE)
+        hechos.add(mp3.name)
+        hechos_f.write_text(json.dumps(sorted(hechos)))
 
 
 if __name__ == "__main__":
