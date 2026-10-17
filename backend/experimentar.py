@@ -154,7 +154,42 @@ def principal_movil():
         print(f"  {nombre:<16} {a1:5.1f}%  top3 {a3:5.1f}%   ({n} consultas)", flush=True)
 
 
-if __name__ == "__main__" and sys.argv[1:2] == ["movil"]:
+def aumentar(modo="normal-onnx", semilla=1):
+    """Huellas de cada clip como si se hubiera grabado con el móvil (otra semilla que la de las consultas)."""
+    from simular_movil import movil
+    from voz import cargar_audio, huellas
+    salida = RAIZ / "data" / "cache_huellas" / (modo + "-aumentado")
+    salida.mkdir(parents=True, exist_ok=True)
+    rng = np.random.default_rng(semilla)
+    for f in sorted((RAIZ / "data" / "cache_huellas" / modo).glob("*.npz")):
+        destino = salida / f.name
+        if destino.exists():
+            continue
+        actor, nombre = f.stem.split("__")
+        clips = list((RAIZ / "data" / "actores" / actor / "clips").glob(nombre + ".*"))
+        np.savez(destino, todo=huellas(movil(cargar_audio(clips[0], max_seg=90), rng)))
+
+
+def combinar(limpio, aumentado):
+    """Cada clip con sus huellas limpias + las simuladas de móvil; las consultas se quedan igual."""
+    aum = {(a, i): t for i, (a, t, _) in enumerate(aumentado)}
+    return [(a, np.concatenate([t, aum[(a, i)]]) if (a, i) in aum and len(aum[(a, i)]) else t, qs)
+            for i, (a, t, qs) in enumerate(limpio)]
+
+
+def principal_aumentado():
+    aumentar()
+    aum = cargar("normal-onnx-aumentado")
+    for modo, nombre in (("normal-onnx", "audio limpio"), ("normal-onnx-movil", "simulando móvil")):
+        base = cargar(modo)
+        assert [a for a, _, _ in base] == [a for a, _, _ in aum]
+        a1, a3, n = evaluar_lda(combinar(base, aum), dims=192, metodo="centroide", pliegues=5, reg=1e-2)
+        print(f"  con aumento, {nombre:<16} {a1:5.1f}%  top3 {a3:5.1f}%   ({n} consultas)", flush=True)
+
+
+if __name__ == "__main__" and sys.argv[1:2] == ["aumentado"]:
+    principal_aumentado()
+elif __name__ == "__main__" and sys.argv[1:2] == ["movil"]:
     principal_movil()
 elif __name__ == "__main__" and sys.argv[1:2] == ["lda"]:
     principal_lda()
