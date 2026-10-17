@@ -213,7 +213,52 @@ def principal_duracion():
         print(f"  móvil simulado, grabando {seg} s: {a1:5.1f}%  top3 {a3:5.1f}%   ({n} consultas)", flush=True)
 
 
-if __name__ == "__main__" and sys.argv[1:2] == ["duracion"]:
+def comparar_modelos():
+    """ECAPA (actual) frente a SimAM-ResNet34 VoxBlink2, con las mismas grabaciones de móvil simuladas.
+
+    Por cada clip: huellas del clip limpio y "de móvil" (para el índice) y hasta 2 consultas de 10 s
+    "de móvil" con exactamente el mismo audio para los dos modelos.
+    """
+    import voxblink
+    from simular_movil import movil
+    from voz import SAMPLE_RATE, cargar_audio, huellas
+    salida = RAIZ / "data" / "cache_huellas" / "comparar"
+    salida.mkdir(parents=True, exist_ok=True)
+    rng_aum, rng_q = np.random.default_rng(1), np.random.default_rng(10)
+    nombres = sorted(f for f in (RAIZ / "data" / "cache_huellas" / "normal-onnx").glob("*.npz") if np.load(f)["todo"].size)
+    for n, f in enumerate(nombres, 1):
+        destino = salida / f.name
+        actor, nombre = f.stem.split("__")
+        audio = cargar_audio(RAIZ / "data" / "actores" / actor / "clips" / f"{nombre}.mp3", max_seg=90)
+        aum = movil(audio, rng_aum)
+        paso = 10 * SAMPLE_RATE
+        qs = [movil(audio[i:i + paso], rng_q) for i in range(0, max(len(audio) - paso, 1), paso)][:2]
+        if destino.exists():
+            continue  # (el audio se genera igual para que los generadores aleatorios no cambien)
+        d = {"vb_todo": voxblink.huellas(audio), "vb_aum": voxblink.huellas(aum)}
+        for i, q in enumerate(qs):
+            d[f"vb_q{i}"], d[f"ec_q{i}"] = voxblink.huellas(q), huellas(q)
+        np.savez(destino, **d)
+        if n % 50 == 0:
+            print(f"  {n}/{len(nombres)} clips", flush=True)
+
+    ecapa_base, ecapa_aum = cargar("normal-onnx"), cargar("normal-onnx-aumentado")
+    vb_base, vb_aum, ec_q = [], [], []
+    for (a, t, _), f in zip(ecapa_base, nombres):
+        d = np.load(salida / f.name)
+        qv = [d[k] for k in d.files if k.startswith("vb_q") and len(d[k])]
+        qe = [d[k] for k in d.files if k.startswith("ec_q") and len(d[k])]
+        vb_base.append((a, d["vb_todo"], qv)); vb_aum.append((a, d["vb_aum"], []))
+        ec_q.append((a, t, qe))
+    for nombre, clips in (("ECAPA (actual)", combinar(ec_q, ecapa_aum)), ("VoxBlink2 SimAM-ResNet34", combinar(vb_base, vb_aum))):
+        dims = clips[0][1].shape[1]
+        a1, a3, k = evaluar_lda(clips, dims=dims, metodo="centroide", pliegues=5, reg=1e-2)
+        print(f"  {nombre:<26} móvil 10 s: {a1:5.1f}%  top3 {a3:5.1f}%   ({k} consultas)", flush=True)
+
+
+if __name__ == "__main__" and sys.argv[1:2] == ["modelos"]:
+    comparar_modelos()
+elif __name__ == "__main__" and sys.argv[1:2] == ["duracion"]:
     principal_duracion()
 elif __name__ == "__main__" and sys.argv[1:2] == ["aumentado"]:
     principal_aumentado()
