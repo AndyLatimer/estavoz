@@ -4,7 +4,7 @@ Necesita un token de escritura de https://huggingface.co/settings/tokens en HF_T
 Uso: HF_TOKEN=hf_... .venv/bin/python despliegue/subir_a_huggingface.py <usuario>/estavoz
 
 Sube solo frontend/ (web, modelo y huellas). Los clips de audio NO se suben.
-Antes: indexar con ESTAVOZ_ONNX=frontend/modelo/ecapa-int8.onnx y despliegue/exportar_web.py.
+Antes: indexar con ESTAVOZ_ONNX=frontend/modelo/voxblink-int8.onnx y despliegue/exportar_web.py.
 """
 import os
 import shutil
@@ -33,7 +33,7 @@ def main():
     if len(sys.argv) != 2 or "HF_TOKEN" not in os.environ:
         sys.exit(__doc__)
     repo = sys.argv[1]
-    for f in ("modelo/ecapa-int8.onnx", "datos/lda.bin", "datos/centroides.bin", "datos/actores.json"):
+    for f in ("modelo/voxblink-int8.onnx", "datos/lda.bin", "datos/centroides.bin", "datos/actores.json"):
         if not (WEB / f).exists():
             sys.exit(f"Falta frontend/{f}")
 
@@ -44,7 +44,7 @@ def main():
         shutil.copytree(WEB, tmp)
         (tmp / "README.md").write_text(CABECERA, encoding="utf-8")
         # delete_patterns: quita fotos y datos viejos que ya no estén en esta versión
-        api.upload_folder(repo_id=repo, repo_type="space", folder_path=tmp, delete_patterns=["fotos/*", "datos/*"],
+        api.upload_folder(repo_id=repo, repo_type="space", folder_path=tmp, delete_patterns=["fotos/*", "datos/*", "modelo/*"],
                           commit_message="Actualizar Estavoz")
     usuario, nombre = repo.split("/")
     print(f"Subido: https://huggingface.co/spaces/{repo}")

@@ -12,7 +12,7 @@ def normaliza(x):
     return x / np.linalg.norm(x, axis=-1, keepdims=True)
 
 
-def entrenar_lda(X, y, dims=192, reg=1e-2):
+def entrenar_lda(X, y, dims=None, reg=1e-2):
     """X: huellas normalizadas (n, 192); y: actor de cada una. Devuelve (media, matriz W)."""
     mu = X.mean(0)
     Xc = X - mu
@@ -27,7 +27,7 @@ def entrenar_lda(X, y, dims=192, reg=1e-2):
     Sb /= len(X)
     Sw += reg * np.trace(Sw) / len(Sw) * np.eye(len(Sw))
     val, vec = eigh(Sb, Sw)
-    return mu, vec[:, np.argsort(-val)[:dims]]
+    return mu, vec[:, np.argsort(-val)[:dims or X.shape[1]]]
 
 
 def proyectar(X, mu, W):

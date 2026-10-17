@@ -36,7 +36,7 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           python despliegue/copia_datos.py "${{ vars.HF_DATOS }}" bajar
-          python -c "from huggingface_hub import hf_hub_download as d; import os, shutil; os.makedirs('frontend/modelo', exist_ok=True); shutil.copy(d('${{ vars.HF_SPACE }}', 'modelo/ecapa-int8.onnx', repo_type='space', token=os.environ['HF_TOKEN']), 'frontend/modelo/ecapa-int8.onnx')"
+          python -c "from huggingface_hub import hf_hub_download as d; import os, shutil; os.makedirs('frontend/modelo', exist_ok=True); shutil.copy(d('${{ vars.HF_SPACE }}', 'modelo/voxblink-int8.onnx', repo_type='space', token=os.environ['HF_TOKEN']), 'frontend/modelo/voxblink-int8.onnx')"
 
       - name: Recoger respuestas
         env:

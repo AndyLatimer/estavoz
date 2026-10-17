@@ -2,6 +2,9 @@
 <html lang="es">
 <head>
 <meta charset="utf-8">
+<!-- Activa el aislamiento entre orígenes (Hugging Face no manda la cabecera COEP) para poder usar
+     varios núcleos del procesador. La primera visita recarga la página una vez. -->
+<script src="coi-serviceworker.min.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Estavoz · ¿Quién pone esa voz?</title>
 <meta name="description" content="Acerca el móvil a la tele y descubre en segundos qué actor de doblaje está hablando.">
@@ -201,7 +204,9 @@ const ARO = 2 * Math.PI * 117;
 let toma = 0;
 
 ort.env.wasm.wasmPaths = new URL('lib/', location.href).href;  // onnxruntime-web 1.20.1, servido desde nuestra web
-ort.env.wasm.numThreads = 1;
+// varios núcleos si el navegador lo permite (crossOriginIsolated), y el cálculo fuera del hilo principal
+ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
+ort.env.wasm.proxy = true;
 
 const leds = [];
 for (let i = 0; i < 30; i++) leds.push($('vu').appendChild(document.createElement('i')));
@@ -214,7 +219,7 @@ const codigo = seg => {
 
 let sesion, ldaMu, ldaW, centroides, actores, dim;
 
-// Descarga con barra de progreso (el modelo pesa ~22 MB la primera vez)
+// Descarga con barra de progreso (el modelo pesa ~27 MB la primera vez)
 async function descargar(url, alAvanzar) {
   const r = await fetch(url);
   const total = +r.headers.get('content-length') || 0;
@@ -233,7 +238,7 @@ async function cargar() {
   const barra = $('carga').firstElementChild;
   try {
     const [modelo, lda, cent, meta] = await Promise.all([
-      descargar('modelo/ecapa-int8.onnx', p => { barra.style.width = `${p * 100}%`; estado.textContent = `Preparando la sala… ${Math.round(p * 100)}%`; }),
+      descargar('modelo/voxblink-int8.onnx', p => { barra.style.width = `${p * 100}%`; estado.textContent = `Preparando la sala… ${Math.round(p * 100)}%`; }),
       fetch('datos/lda.bin').then(r => r.arrayBuffer()),
       fetch('datos/centroides.bin').then(r => r.arrayBuffer()),
       fetch('datos/actores.json').then(r => r.json()),
@@ -261,17 +266,28 @@ async function a16k(blob) {
   return (await off.startRendering()).getChannelData(0);
 }
 
+async function huellaTrozo(t) {
+  const r = await sesion.run({ wav: new ort.Tensor('float32', t, [1, t.length]) });
+  const v = r.huella.data, n = Math.hypot(...v);
+  return Float32Array.from(v, x => x / n);
+}
+
 async function huellasDe(audio) {
   audio = audio.subarray(0, MAX_CONSULTA);
   const out = [];
   for (let i = 0; i < audio.length; i += TROZO) {
     const t = audio.slice(i, i + TROZO);
-    if (t.length < TROZO_MIN) continue;
-    const r = await sesion.run({ wav: new ort.Tensor('float32', t, [1, t.length]) });
-    const v = r.huella.data, n = Math.hypot(...v);
-    out.push(Float32Array.from(v, x => x / n));
+    if (t.length >= TROZO_MIN) out.push(await huellaTrozo(t));
   }
   return out;
+}
+
+// Audio crudo del micrófono (a la frecuencia del móvil) -> mono 16 kHz
+async function remuestrear(datos, tasa) {
+  const off = new OfflineAudioContext(1, Math.ceil(datos.length * SR / tasa), SR);
+  const buf = off.createBuffer(1, datos.length, tasa); buf.copyToChannel(datos, 0);
+  const src = off.createBufferSource(); src.buffer = buf; src.connect(off.destination); src.start();
+  return (await off.startRendering()).getChannelData(0);
 }
 
 // Proyección LDA (despliegue/exportar_web.py): quita de la huella lo que depende de la
@@ -345,12 +361,12 @@ obra.addEventListener('input', () => {
 const PILOTO = { grabando: 'GRABANDO', analizando: 'ANALIZANDO' };
 function modo(m) { sala.className = m || ''; $('piloto').textContent = PILOTO[m] || 'EN SILENCIO'; }
 
-async function identificar(blob) {
+async function identificar(blob, huellasListas = null) {
   modo('analizando');
   estado.textContent = 'Escuchando la toma…';
   res.innerHTML = '';
   try {
-    const consulta = await huellasDe(await a16k(blob));
+    const consulta = huellasListas ? await huellasListas : await huellasDe(await a16k(blob));
     if (!consulta.length) throw new Error('corto');
     ultimaConsulta = consulta;
     const candidatos = await candidatosPara(obra.value);
@@ -390,15 +406,14 @@ btn.onclick = async () => {
     requestAnimationFrame(mide);
   })();
 
-  const rec = new MediaRecorder(stream);
-  const partes = [];
-  rec.ondataavailable = e => partes.push(e.data);
-  rec.onstop = () => {
-    vivo = false; ctx.close();
-    document.documentElement.style.setProperty('--nivel', 0);
-    stream.getTracks().forEach(t => t.stop());
-    identificar(new Blob(partes, { type: rec.mimeType }));
-  };
+  // audio crudo del micrófono
+  const fuente = ctx.createMediaStreamSource(stream);
+  const captura = ctx.createScriptProcessor(4096, 1, 1);
+  const bloques = []; let muestras = 0;
+  captura.onaudioprocess = e => { const d = e.inputBuffer.getChannelData(0); bloques.push(new Float32Array(d)); muestras += d.length; };
+  fuente.connect(captura); captura.connect(ctx.destination);
+  const juntar = () => { const a = new Float32Array(muestras); let o = 0; for (const b of bloques) { a.set(b, o); o += b.length; } return a; };
+  const tasa = ctx.sampleRate;
 
   res.innerHTML = '';
   btn.disabled = true; modo('grabando');
@@ -411,8 +426,29 @@ btn.onclick = async () => {
     tc.textContent = codigo(SEGUNDOS * (1 - p));
     if (p < 1 && vivo) requestAnimationFrame(avanza);
   })();
-  rec.start();
-  setTimeout(() => rec.stop(), SEGUNDOS * 1000);
+
+  // a los 6 s se calcula la primera huella mientras se graban los últimos segundos
+  let primera = null;
+  setTimeout(async () => {
+    const a = await remuestrear(juntar(), tasa);
+    primera = huellaTrozo(a.slice(0, TROZO));
+  }, TROZO / SR * 1000 + 250);
+
+  setTimeout(async () => {
+    vivo = false;
+    captura.disconnect(); fuente.disconnect();
+    stream.getTracks().forEach(t => t.stop());
+    document.documentElement.style.setProperty('--nivel', 0);
+    const a = await remuestrear(juntar(), tasa);
+    ctx.close();
+    const huellas = (async () => {
+      const out = [await (primera || huellaTrozo(a.slice(0, TROZO)))];
+      const resto = a.slice(TROZO, SEGUNDOS * SR);
+      if (resto.length >= TROZO_MIN) out.push(await huellaTrozo(resto));
+      return out;
+    })();
+    identificar(null, huellas);
+  }, SEGUNDOS * 1000);
 };
 
 $('fichero').onchange = e => {
@@ -479,7 +515,7 @@ async function responder(acierto, real = null) {
       method: 'POST',
       headers: { apikey: CONFIG.supabaseKey, Authorization: `Bearer ${CONFIG.supabaseKey}`,
                  'Content-Type': 'application/json', Prefer: 'return=minimal' },
-      body: JSON.stringify({ propuesto: ultimo.id, acierto, real, huellas, version: '1' }),
+      body: JSON.stringify({ propuesto: ultimo.id, acierto, real, huellas, version: '2' }),  // 2 = VoxBlink2 (256 números)
     });
   } catch (e) { console.error(e); }
 }

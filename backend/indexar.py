@@ -7,7 +7,7 @@ Estructura esperada:
 Uso: .venv/bin/python backend/indexar.py [--separar] [--nuevos]
   --nuevos solo calcula los clips que aún no están en el índice y los añade
   --aumentar añade también, por cada clip, sus huellas como si se hubiera grabado con el móvil
-             delante de la tele (backend/simular_movil.py); su clip se marca con "#movil"
+             delante de la tele (backend/simular_movil.py, con ecos y ruidos reales); su clip se marca con "#movil"
   --separar quita música y efectos con Demucs (más lento, más acierto con audio de películas)
 """
 import argparse
@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from simular_movil import movil  # noqa: E402
+from simular_movil import movil_real as movil  # noqa: E402
 from voz import cargar_audio, huellas  # noqa: E402
 
 RAIZ = Path(__file__).resolve().parent.parent

@@ -8,7 +8,7 @@ Genera en frontend/:
   fotos/<n>.jpg
 La web no enlaza ni carga nada de fuera.
 Si existe data/respuestas.json (backend/aprender.py), añade las respuestas "¿Acertamos?" que pasen los filtros.
-El índice tiene que estar hecho con ESTAVOZ_ONNX=frontend/modelo/ecapa-int8.onnx.
+El índice tiene que estar hecho con ESTAVOZ_ONNX=frontend/modelo/voxblink-int8.onnx.
 """
 import json
 import re

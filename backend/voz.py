@@ -90,7 +90,8 @@ def huellas(audio: np.ndarray) -> np.ndarray:
     """Una huella normalizada (192 números) por cada trozo del audio."""
     partes = trozos(audio)
     if not partes:
-        return np.zeros((0, 192), dtype=np.float32)
+        dim = sesion_onnx().get_outputs()[0].shape[-1] if ONNX else 192
+        return np.zeros((0, dim if isinstance(dim, int) else 192), dtype=np.float32)
     vecs = [huella_trozo(p) for p in partes]
     vecs = np.stack(vecs).astype(np.float32)
     return vecs / np.linalg.norm(vecs, axis=1, keepdims=True)
