@@ -4,6 +4,7 @@ Pasos (se pueden repetir; lo ya descargado no se vuelve a pedir):
   .venv/bin/python scraper/eldoblaje.py listar             # lista de todos los actores de doblaje
   .venv/bin/python scraper/eldoblaje.py fichas [--max N]   # fichas + clips de voz de cada actor
   .venv/bin/python scraper/eldoblaje.py fotos              # fotos de los actores ya descargados
+  .venv/bin/python scraper/eldoblaje.py trabajos           # lista completa de doblajes de cada actor con voz
 
 Resultado en data/actores/<id>-<nombre>/ (ficha.json y clips/), listo para backend/indexar.py.
 Va despacio a propósito (PAUSA_SEG entre peticiones) para no cargar su servidor.
@@ -177,6 +178,50 @@ def fotos():
         print(f"[{n}/{len(pendientes)}] {carpeta.name}")
 
 
+def trabajos_de_obra(sopa: BeautifulSoup) -> list[dict]:
+    """Como trabajos_de, pero guardando también el id de la obra en eldoblaje."""
+    out = []
+    for fila in sopa.find_all("tr"):
+        celdas = fila.find_all("td", recursive=False)
+        if len(celdas) != 4:
+            continue
+        original = celdas[0].find("a", href=re.compile(r"^FichaActorOriginal"))
+        obra = celdas[1].find("a", href=re.compile(r"^FichaPelicula"))
+        if not (original and obra):
+            continue
+        anio = celdas[3].get_text(strip=True)
+        out.append({
+            "id": int(obra["href"].split("id=")[1].split("&")[0]),
+            "obra": obra.get_text(" ", strip=True),
+            "actor_original": original.get_text(" ", strip=True).title(),
+            "personaje": celdas[2].get_text(" ", strip=True),
+            "anio": int(anio) if anio.isdigit() else None,
+        })
+    return out
+
+
+def trabajos():
+    """Todas las páginas de trabajos de cada actor que tiene voz (data/actores/*/trabajos.json)."""
+    carpetas = sorted(f.parent for f in ACTORES.glob("*/ficha.json"))
+    for n, carpeta in enumerate(carpetas, 1):
+        destino = carpeta / "trabajos.json"
+        if destino.exists():
+            continue
+        id_ = carpeta.name.split("-")[0]
+        todos, pag, total = [], 1, 1
+        while pag <= total:
+            sopa = html(f"{BASE}FichaActorDoblaje.asp?id={id_}&pag={pag}&orden=")
+            if sopa is None:
+                break
+            todos += trabajos_de_obra(sopa)
+            paginas = [int(m) for m in re.findall(rf"FichaActorDoblaje\.asp\?id={id_}&(?:amp;)?pag=(\d+)", str(sopa))]
+            total = max(paginas, default=1)
+            pag += 1
+        else:
+            destino.write_text(json.dumps(todos, ensure_ascii=False), encoding="utf-8")
+        print(f"[{n}/{len(carpetas)}] {carpeta.name}: {len(todos)} trabajos en {total} páginas")
+
+
 def fichas(maximo: int | None):
     if not LISTA.exists():
         sys.exit("Primero: scraper/eldoblaje.py listar")
@@ -197,7 +242,7 @@ def fichas(maximo: int | None):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("paso", choices=["listar", "fichas", "fotos"])
+    p.add_argument("paso", choices=["listar", "fichas", "fotos", "trabajos"])
     p.add_argument("--max", type=int, help="procesar como mucho N actores (para probar)")
     a = p.parse_args()
-    {"listar": listar, "fotos": fotos}.get(a.paso, lambda: fichas(a.max))()
+    {"listar": listar, "fotos": fotos, "trabajos": trabajos}.get(a.paso, lambda: fichas(a.max))()
