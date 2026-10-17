@@ -24,7 +24,7 @@ def main():
         print("Datos restaurados en data/")
         return
     api.create_repo(repo, repo_type="dataset", private=True, exist_ok=True)
-    api.upload_large_folder(repo_id=repo, repo_type="dataset", folder_path=RAIZ / "data",
+    api.upload_folder(repo_id=repo, repo_type="dataset", folder_path=RAIZ / "data", commit_message="Copia de datos",
                             ignore_patterns=["podcasts/audio/**", "**/*.part", "respuestas.json"])
     print(f"Copia subida a https://huggingface.co/datasets/{repo} (privado)")
 
