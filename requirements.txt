@@ -6,3 +6,4 @@ numpy
 soundfile
 requests
 beautifulsoup4
+demucs

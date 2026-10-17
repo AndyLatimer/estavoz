@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.staticfiles import StaticFiles
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from voz import cargar_audio, huellas, modelo  # noqa: E402
+from voz import cargar_audio, huellas, modelo, separador  # noqa: E402
 
 RAIZ = Path(__file__).resolve().parent.parent
 app = FastAPI(title="Estavoz")
@@ -23,6 +23,8 @@ def cargar_indice():
     datos = np.load(RAIZ / "data" / "indice.npz")
     INDICE["vectores"] = datos["vectores"]
     INDICE["etiquetas"] = datos["etiquetas"]
+    # la grabación se trata igual que se trataron los clips del índice
+    INDICE["separar"] = bool(datos["separado"]) if "separado" in datos.files else False
     INDICE["fichas"] = json.loads((RAIZ / "data" / "fichas.json").read_text(encoding="utf-8"))
 
 
@@ -31,6 +33,8 @@ def arrancar():
     modelo()
     if (RAIZ / "data" / "indice.npz").exists():
         cargar_indice()
+        if INDICE["separar"]:
+            separador()
 
 
 def puntuar(consulta: np.ndarray, top: int = 3) -> list[dict]:
@@ -56,7 +60,7 @@ async def identificar(audio: UploadFile):
         tmp.write(await audio.read())
         tmp.flush()
         try:
-            consulta = huellas(cargar_audio(tmp.name))
+            consulta = huellas(cargar_audio(tmp.name, separar=INDICE["separar"], max_seg=20))
         except Exception:
             raise HTTPException(400, "No se pudo leer el audio")
     if len(consulta) == 0:

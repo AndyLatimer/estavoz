@@ -17,22 +17,24 @@ from voz import SAMPLE_RATE, cargar_audio, huellas  # noqa: E402
 
 RAIZ = Path(__file__).resolve().parent.parent
 CACHE = RAIZ / "data" / "cache_huellas"
+SEPARAR = False
+MAX_SEG = 90
 CONSULTA_SEG = 8
 
 
 def huellas_clip(clip: Path) -> tuple[np.ndarray, list[np.ndarray]]:
     """Huellas del clip entero y de varias consultas de 8 s sacadas de él (con caché)."""
-    cache = CACHE / f"{clip.parent.parent.name}__{clip.stem}.npz"
+    cache = CACHE / ("separado" if SEPARAR else "normal") / f"{clip.parent.parent.name}__{clip.stem}.npz"
     if cache.exists():
         d = np.load(cache)
         return d["todo"], [d[k] for k in d.files if k.startswith("q")]
-    audio = cargar_audio(clip)
+    audio = cargar_audio(clip, separar=SEPARAR, max_seg=MAX_SEG)
     todo = huellas(audio)
     paso = CONSULTA_SEG * SAMPLE_RATE
     inicios = range(0, max(len(audio) - paso, 1), paso)
     consultas = [huellas(audio[i:i + paso]) for i in list(inicios)[:3]]
     consultas = [c for c in consultas if len(c)]
-    CACHE.mkdir(parents=True, exist_ok=True)
+    cache.parent.mkdir(parents=True, exist_ok=True)
     np.savez(cache, todo=todo, **{f"q{i}": c for i, c in enumerate(consultas)})
     return todo, consultas
 
@@ -40,10 +42,16 @@ def huellas_clip(clip: Path) -> tuple[np.ndarray, list[np.ndarray]]:
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--max-actores", type=int)
+    p.add_argument("--solo", help="usar solo estos actores (lista separada por comas)")
+    p.add_argument("--separar", action="store_true", help="quitar música y efectos con Demucs")
     args = p.parse_args()
+    global SEPARAR
+    SEPARAR = args.separar
 
     carpetas = sorted(c for c in (RAIZ / "data" / "actores").iterdir() if (c / "clips").exists())
     random.seed(0)
+    if args.solo:
+        carpetas = [c for c in carpetas if c.name in args.solo.split(",")]
     if args.max_actores:
         carpetas = random.sample(carpetas, min(args.max_actores, len(carpetas)))
 

@@ -14,6 +14,26 @@ TROZO_MIN_SEG = 2    # trozos más cortos se descartan
 
 
 @lru_cache(maxsize=1)
+def separador():
+    from demucs.pretrained import get_model
+    m = get_model("htdemucs")
+    m.eval()
+    return m
+
+
+@torch.no_grad()
+def solo_voz(estereo_44k: np.ndarray) -> np.ndarray:
+    """Quita música y efectos con Demucs. Entra estéreo 44.1 kHz, sale mono 16 kHz."""
+    from demucs.apply import apply_model
+    import torchaudio.functional as F
+    m = separador()
+    x = torch.from_numpy(estereo_44k.T.copy())[None]
+    fuentes = apply_model(m, x, device="cpu", shifts=0, split=True, overlap=0.1, progress=False)[0]
+    voz = fuentes[m.sources.index("vocals")].mean(0)
+    return F.resample(voz, m.samplerate, SAMPLE_RATE).numpy()
+
+
+@lru_cache(maxsize=1)
 def modelo():
     from speechbrain.inference.speaker import EncoderClassifier
     raiz = Path(__file__).resolve().parent.parent
@@ -24,16 +44,21 @@ def modelo():
     )
 
 
-def cargar_audio(ruta: str | Path) -> np.ndarray:
-    """Cualquier formato (mp3, webm del móvil, wav...) -> 16 kHz mono float32."""
+def cargar_audio(ruta: str | Path, separar: bool = False, max_seg: int | None = None) -> np.ndarray:
+    """Cualquier formato (mp3, webm del móvil, wav...) -> 16 kHz mono float32.
+
+    separar=True quita antes la música y los efectos (más lento).
+    """
+    canales, frecuencia = ("2", "44100") if separar else ("1", str(SAMPLE_RATE))
+    limite = ["-t", str(max_seg)] if max_seg else []
     with tempfile.NamedTemporaryFile(suffix=".wav") as tmp:
         subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error", "-i", str(ruta),
-             "-ac", "1", "-ar", str(SAMPLE_RATE), tmp.name],
+            ["ffmpeg", "-y", "-loglevel", "error", "-i", str(ruta), *limite,
+             "-ac", canales, "-ar", frecuencia, tmp.name],
             check=True,
         )
         audio, _ = sf.read(tmp.name, dtype="float32")
-    return audio
+    return solo_voz(audio) if separar else audio
 
 
 def trozos(audio: np.ndarray) -> list[np.ndarray]:
