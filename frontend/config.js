@@ -2,6 +2,6 @@
 // por diseño: la base de datos solo le deja añadir respuestas (despliegue/supabase.sql).
 // Si están vacíos, la pregunta "¿Acertamos?" no se muestra.
 window.ESTAVOZ_CONFIG = {
-  supabaseUrl: "",
-  supabaseKey: "",
+  supabaseUrl: "https://kctkyoelnatotvtlgflg.supabase.co",
+  supabaseKey: "sb_publishable_hyZFRxJorpHwes3uuhLqng_iOQY1Mn4",
 };
