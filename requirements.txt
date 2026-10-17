@@ -1,0 +1,8 @@
+speechbrain
+fastapi
+uvicorn[standard]
+python-multipart
+numpy
+soundfile
+requests
+beautifulsoup4

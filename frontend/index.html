@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Estavoz</title>
+<meta name="description" content="Escucha unos segundos de una película o serie y descubre qué actor de doblaje está hablando.">
+<style>
+  :root { --bg:#0f1115; --card:#1a1d24; --txt:#f2f2f2; --sub:#9aa0aa; --acc:#ff5a36; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--txt);
+         display:flex; flex-direction:column; align-items:center; padding:24px 16px; min-height:100vh; }
+  h1 { margin:8px 0 4px; font-size:28px; }
+  p.sub { color:var(--sub); margin:0 0 32px; text-align:center; }
+  #btn { width:180px; height:180px; border-radius:50%; border:none; background:var(--acc); color:#fff;
+         font-size:20px; font-weight:700; cursor:pointer; box-shadow:0 0 0 0 rgba(255,90,54,.6); }
+  #btn.grabando { animation: pulso 1.2s infinite; }
+  @keyframes pulso { 0%{box-shadow:0 0 0 0 rgba(255,90,54,.6)} 100%{box-shadow:0 0 0 40px rgba(255,90,54,0)} }
+  #estado { margin:24px 0; color:var(--sub); min-height:1.4em; text-align:center; }
+  #resultados { width:100%; max-width:480px; display:grid; gap:12px; }
+  .card { background:var(--card); border-radius:14px; padding:14px; display:flex; gap:14px; }
+  .card img { width:72px; height:72px; object-fit:cover; border-radius:10px; background:#333; flex-shrink:0; }
+  .card h2 { margin:0; font-size:18px; }
+  .pct { color:var(--acc); font-weight:700; }
+  .card ul { margin:6px 0; padding-left:18px; color:var(--sub); font-size:14px; }
+  .card a { color:var(--acc); font-size:14px; }
+  .principal { outline:2px solid var(--acc); }
+</style>
+</head>
+<body>
+  <h1>Estavoz</h1>
+  <p class="sub">Pon el móvil cerca de la tele y descubre quién dobla esa voz</p>
+  <button id="btn">Escuchar</button>
+  <div id="estado"></div>
+  <div id="resultados"></div>
+<script>
+const SEGUNDOS = 8;
+const btn = document.getElementById('btn');
+const estado = document.getElementById('estado');
+const res = document.getElementById('resultados');
+
+// El parecido del modelo (coseno) no es un porcentaje; esto lo traduce a algo legible.
+const aPorcentaje = s => Math.round(Math.max(0, Math.min(1, (s - 0.15) / 0.55)) * 100);
+
+btn.onclick = async () => {
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch { estado.textContent = 'Necesito permiso para usar el micrófono'; return; }
+  const rec = new MediaRecorder(stream);
+  const partes = [];
+  rec.ondataavailable = e => partes.push(e.data);
+  rec.onstop = () => { stream.getTracks().forEach(t => t.stop()); enviar(new Blob(partes, { type: rec.mimeType })); };
+  res.innerHTML = '';
+  btn.disabled = true; btn.classList.add('grabando');
+  let quedan = SEGUNDOS;
+  estado.textContent = `Escuchando… ${quedan}`;
+  const t = setInterval(() => { quedan--; estado.textContent = `Escuchando… ${quedan}`; }, 1000);
+  rec.start();
+  setTimeout(() => { clearInterval(t); rec.stop(); }, SEGUNDOS * 1000);
+};
+
+async function enviar(blob) {
+  btn.classList.remove('grabando');
+  estado.textContent = 'Analizando la voz…';
+  const ext = blob.type.includes('mp4') ? 'mp4' : blob.type.includes('ogg') ? 'ogg' : 'webm';
+  const fd = new FormData(); fd.append('audio', blob, 'grabacion.' + ext);
+  try {
+    const r = await fetch('/api/identificar', { method: 'POST', body: fd });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || 'Error');
+    pintar(j.resultados);
+  } catch (e) { estado.textContent = e.message; }
+  btn.disabled = false;
+}
+
+function pintar(lista) {
+  const top = lista[0];
+  estado.textContent = aPorcentaje(top.parecido) >= 50 ? '¡Te lo tengo!' : 'No estoy muy seguro… ¿será alguno de estos?';
+  res.innerHTML = lista.map((a, i) => `
+    <div class="card ${i === 0 ? 'principal' : ''}">
+      <img src="${a.foto || ''}" alt="" onerror="this.style.visibility='hidden'">
+      <div>
+        <h2>${a.nombre} <span class="pct">${aPorcentaje(a.parecido)}%</span></h2>
+        ${a.trabajos?.length ? `<ul>${a.trabajos.slice(0, 5).map(t => `<li>${t}</li>`).join('')}</ul>` : ''}
+        ${a.url ? `<a href="${a.url}" target="_blank" rel="noopener">Ficha completa en eldoblaje.com →</a>` : ''}
+      </div>
+    </div>`).join('');
+}
+</script>
+</body>
+</html>

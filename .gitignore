@@ -1,0 +1,6 @@
+.venv/
+modelos/
+data/actores/
+data/indice.npz
+data/fichas.json
+__pycache__/
