@@ -33,6 +33,7 @@ def main():
     p.add_argument("--separar", action="store_true")
     p.add_argument("--nuevos", action="store_true")
     p.add_argument("--aumentar", action="store_true")
+    p.add_argument("--cache", help="carpeta donde guardar las huellas de cada actor (para poder reanudar)")
     args = p.parse_args()
     separar = args.separar
     hechos = set()
@@ -48,6 +49,14 @@ def main():
             continue
         clips = [c for c in sorted((carpeta / "clips").glob("*")) if c.suffix.lower() in EXT_AUDIO]
         n = 0
+        guardado = Path(args.cache) / f"{carpeta.name}.npz" if args.cache else None
+        if guardado and guardado.exists():  # ya calculado antes de un corte
+            g = np.load(guardado)
+            if len(g["etiquetas"]):
+                vectores.append(g["vectores"]); etiquetas += list(g["etiquetas"]); clips_id += list(g["clips"])
+                fichas[carpeta.name] = json.loads(ficha_path.read_text(encoding="utf-8"))
+            continue
+        inicio, n_vect_inicio = len(etiquetas), len(vectores)
         for clip in clips:
             if f"{carpeta.name}/{clip.name}" in hechos:
                 n += 1  # ya estaba en el índice
@@ -69,6 +78,11 @@ def main():
                 clips_id += [f"{carpeta.name}/{clip.name}#movil"] * len(hm)
         if n:
             fichas[carpeta.name] = json.loads(ficha_path.read_text(encoding="utf-8"))
+        if guardado:
+            guardado.parent.mkdir(parents=True, exist_ok=True)
+            v = vectores[n_vect_inicio:]
+            v = np.concatenate(v) if v else np.zeros((0, 1), np.float32)
+            np.savez(guardado, vectores=v, etiquetas=np.array(etiquetas[inicio:]), clips=np.array(clips_id[inicio:]))
         print(f"{carpeta.name}: {len(clips)} clips, {n} trozos")
 
     if hechos:  # añadir a lo que ya había
