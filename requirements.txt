@@ -7,3 +7,6 @@ soundfile
 requests
 beautifulsoup4
 demucs
+onnx
+onnxruntime
+huggingface_hub

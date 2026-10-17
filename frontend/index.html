@@ -14,9 +14,12 @@
   p.sub { color:var(--sub); margin:0 0 32px; text-align:center; }
   #btn { width:180px; height:180px; border-radius:50%; border:none; background:var(--acc); color:#fff;
          font-size:20px; font-weight:700; cursor:pointer; box-shadow:0 0 0 0 rgba(255,90,54,.6); }
-  #btn.grabando { animation: pulso 1.2s infinite; }
+  #btn:disabled { opacity:.5; cursor:default; }
+  #btn.grabando { animation: pulso 1.2s infinite; opacity:1; }
   @keyframes pulso { 0%{box-shadow:0 0 0 0 rgba(255,90,54,.6)} 100%{box-shadow:0 0 0 40px rgba(255,90,54,0)} }
-  #estado { margin:24px 0; color:var(--sub); min-height:1.4em; text-align:center; }
+  #estado { margin:24px 0 8px; color:var(--sub); min-height:1.4em; text-align:center; }
+  #subir { color:var(--sub); font-size:14px; margin-bottom:24px; }
+  #subir label { color:var(--acc); cursor:pointer; text-decoration:underline; }
   #resultados { width:100%; max-width:480px; display:grid; gap:12px; }
   .card { background:var(--card); border-radius:14px; padding:14px; display:flex; gap:14px; }
   .card img { width:72px; height:72px; object-fit:cover; border-radius:10px; background:#333; flex-shrink:0; }
@@ -25,31 +28,130 @@
   .card ul { margin:6px 0; padding-left:18px; color:var(--sub); font-size:14px; }
   .card a { color:var(--acc); font-size:14px; }
   .principal { outline:2px solid var(--acc); }
+  footer { margin-top:auto; padding-top:32px; color:var(--sub); font-size:12px; text-align:center; max-width:480px; }
+  footer a { color:var(--sub); }
 </style>
 </head>
 <body>
   <h1>Estavoz</h1>
   <p class="sub">Pon el móvil cerca de la tele y descubre quién dobla esa voz</p>
-  <button id="btn">Escuchar</button>
-  <div id="estado"></div>
+  <button id="btn" disabled>Escuchar</button>
+  <div id="estado">Cargando…</div>
+  <div id="subir">o <label for="fichero">sube un audio</label><input type="file" id="fichero" accept="audio/*,video/*" hidden></div>
   <div id="resultados"></div>
+  <footer>
+    El audio se analiza en tu propio dispositivo y no se envía a ningún sitio.<br>
+    Fichas y muestras de voz: <a href="https://www.eldoblaje.com" target="_blank" rel="noopener">eldoblaje.com</a>
+  </footer>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.wasm.min.js"></script>
 <script>
-const SEGUNDOS = 8;
+const SR = 16000, SEGUNDOS = 8;
+const TROZO = 6 * SR, TROZO_MIN = 2 * SR, MAX_CONSULTA = 20 * SR;  // igual que backend/voz.py
 const btn = document.getElementById('btn');
 const estado = document.getElementById('estado');
 const res = document.getElementById('resultados');
 
-// El parecido del modelo (coseno) no es un porcentaje; esto lo traduce a algo legible.
-const aPorcentaje = s => Math.round(Math.max(0, Math.min(1, (s - 0.15) / 0.55)) * 100);
+ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/';
+ort.env.wasm.numThreads = 1;
+
+let sesion, huellas, etiquetas, actores, dim;
+
+async function cargar() {
+  try {
+    const [s, bin, meta] = await Promise.all([
+      ort.InferenceSession.create('modelo/ecapa-int8.onnx'),
+      fetch('datos/huellas.bin').then(r => r.arrayBuffer()),
+      fetch('datos/actores.json').then(r => r.json()),
+    ]);
+    sesion = s; huellas = new Float32Array(bin); dim = meta.dim;
+    etiquetas = Int32Array.from(meta.etiquetas); actores = meta.actores;
+    estado.textContent = `Listo · ${actores.length} actores de doblaje`;
+    btn.disabled = false;
+  } catch (e) {
+    console.error(e);
+    estado.textContent = 'No se pudo cargar Estavoz. Recarga la página.';
+  }
+}
+
+// Cualquier audio -> mono 16 kHz
+async function a16k(blob) {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const buf = await ctx.decodeAudioData(await blob.arrayBuffer());
+  ctx.close();
+  const off = new OfflineAudioContext(1, Math.ceil(buf.duration * SR), SR);
+  const src = off.createBufferSource(); src.buffer = buf; src.connect(off.destination); src.start();
+  return (await off.startRendering()).getChannelData(0);
+}
+
+async function huellasDe(audio) {
+  audio = audio.subarray(0, MAX_CONSULTA);
+  const out = [];
+  for (let i = 0; i < audio.length; i += TROZO) {
+    const t = audio.slice(i, i + TROZO);
+    if (t.length < TROZO_MIN) continue;
+    const r = await sesion.run({ wav: new ort.Tensor('float32', t, [1, t.length]) });
+    const v = r.huella.data, n = Math.hypot(...v);
+    out.push(Float32Array.from(v, x => x / n));
+  }
+  return out;
+}
+
+// Misma puntuación que backend/app.py: parecido medio con cada huella del índice,
+// y por actor la media de sus 3 huellas más parecidas.
+function puntuar(consulta, top = 3) {
+  const filas = etiquetas.length, sims = new Float32Array(filas);
+  for (let f = 0; f < filas; f++) {
+    let s = 0;
+    for (const q of consulta) {
+      let d = 0; const o = f * dim;
+      for (let k = 0; k < dim; k++) d += q[k] * huellas[o + k];
+      s += d;
+    }
+    sims[f] = s / consulta.length;
+  }
+  const porActor = new Map();
+  for (let f = 0; f < filas; f++) {
+    const a = etiquetas[f];
+    if (!porActor.has(a)) porActor.set(a, []);
+    porActor.get(a).push(sims[f]);
+  }
+  const lista = [...porActor].map(([a, s]) => {
+    s.sort((x, y) => y - x);
+    const mejores = s.slice(0, 3);
+    return { ...actores[a], parecido: mejores.reduce((x, y) => x + y, 0) / mejores.length };
+  });
+  return lista.sort((x, y) => y.parecido - x.parecido).slice(0, top);
+}
+
+async function identificar(blob) {
+  estado.textContent = 'Analizando la voz…';
+  res.innerHTML = '';
+  try {
+    const consulta = await huellasDe(await a16k(blob));
+    if (!consulta.length) throw new Error('Audio demasiado corto: graba al menos 3 segundos');
+    pintar(puntuar(consulta));
+  } catch (e) {
+    console.error(e);
+    estado.textContent = e.message.startsWith('Audio') ? e.message : 'No se pudo leer el audio';
+  }
+  btn.disabled = false;
+}
 
 btn.onclick = async () => {
   let stream;
-  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
-  catch { estado.textContent = 'Necesito permiso para usar el micrófono'; return; }
+  try {
+    // sin filtros del móvil: la supresión de ruido estropea la voz que sale de la tele
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+  } catch { estado.textContent = 'Necesito permiso para usar el micrófono'; return; }
   const rec = new MediaRecorder(stream);
   const partes = [];
   rec.ondataavailable = e => partes.push(e.data);
-  rec.onstop = () => { stream.getTracks().forEach(t => t.stop()); enviar(new Blob(partes, { type: rec.mimeType })); };
+  rec.onstop = () => {
+    stream.getTracks().forEach(t => t.stop());
+    btn.classList.remove('grabando');
+    identificar(new Blob(partes, { type: rec.mimeType }));
+  };
   res.innerHTML = '';
   btn.disabled = true; btn.classList.add('grabando');
   let quedan = SEGUNDOS;
@@ -59,33 +161,30 @@ btn.onclick = async () => {
   setTimeout(() => { clearInterval(t); rec.stop(); }, SEGUNDOS * 1000);
 };
 
-async function enviar(blob) {
-  btn.classList.remove('grabando');
-  estado.textContent = 'Analizando la voz…';
-  const ext = blob.type.includes('mp4') ? 'mp4' : blob.type.includes('ogg') ? 'ogg' : 'webm';
-  const fd = new FormData(); fd.append('audio', blob, 'grabacion.' + ext);
-  try {
-    const r = await fetch('/api/identificar', { method: 'POST', body: fd });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.detail || 'Error');
-    pintar(j.resultados);
-  } catch (e) { estado.textContent = e.message; }
-  btn.disabled = false;
-}
+document.getElementById('fichero').onchange = e => {
+  const f = e.target.files[0];
+  if (f && sesion) { btn.disabled = true; identificar(f); }
+  e.target.value = '';
+};
+
+// El parecido del modelo (coseno) no es un porcentaje; esto lo traduce a algo legible.
+const aPorcentaje = s => Math.round(Math.max(0, Math.min(1, (s - 0.15) / 0.55)) * 100);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 function pintar(lista) {
-  const top = lista[0];
-  estado.textContent = aPorcentaje(top.parecido) >= 50 ? '¡Te lo tengo!' : 'No estoy muy seguro… ¿será alguno de estos?';
+  estado.textContent = aPorcentaje(lista[0].parecido) >= 50 ? '¡Te lo tengo!' : 'No estoy muy seguro… ¿será alguno de estos?';
   res.innerHTML = lista.map((a, i) => `
     <div class="card ${i === 0 ? 'principal' : ''}">
-      <img src="${a.foto || ''}" alt="" onerror="this.style.visibility='hidden'">
+      <img src="${esc(a.foto)}" alt="" onerror="this.style.visibility='hidden'">
       <div>
-        <h2>${a.nombre} <span class="pct">${aPorcentaje(a.parecido)}%</span></h2>
-        ${a.trabajos?.length ? `<ul>${a.trabajos.slice(0, 5).map(t => `<li>${t}</li>`).join('')}</ul>` : ''}
-        ${a.url ? `<a href="${a.url}" target="_blank" rel="noopener">Ficha completa en eldoblaje.com →</a>` : ''}
+        <h2>${esc(a.nombre)} <span class="pct">${aPorcentaje(a.parecido)}%</span></h2>
+        ${a.trabajos?.length ? `<ul>${a.trabajos.slice(0, 5).map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
+        ${a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener">Ficha completa en eldoblaje.com →</a>` : ''}
       </div>
     </div>`).join('');
 }
+
+cargar();
 </script>
 </body>
 </html>

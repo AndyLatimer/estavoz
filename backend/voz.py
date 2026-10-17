@@ -1,4 +1,5 @@
 """Huellas de voz: convierte audio en un vector que resume cómo suena la voz."""
+import os
 import subprocess
 import tempfile
 from functools import lru_cache
@@ -67,15 +68,29 @@ def trozos(audio: np.ndarray) -> list[np.ndarray]:
     return [p for p in partes if len(p) >= TROZO_MIN_SEG * SAMPLE_RATE]
 
 
+# Con ESTAVOZ_ONNX=ruta.onnx se usa el mismo modelo que corre en el navegador,
+# para que las huellas del índice y las del móvil salgan idénticas.
+ONNX = os.environ.get("ESTAVOZ_ONNX")
+
+
+@lru_cache(maxsize=1)
+def sesion_onnx():
+    import onnxruntime as ort
+    return ort.InferenceSession(ONNX)
+
+
 @torch.no_grad()
+def huella_trozo(trozo: np.ndarray) -> np.ndarray:
+    if ONNX:
+        return sesion_onnx().run(None, {"wav": trozo[None].astype(np.float32)})[0][0]
+    return modelo().encode_batch(torch.from_numpy(trozo).unsqueeze(0)).squeeze().numpy()
+
+
 def huellas(audio: np.ndarray) -> np.ndarray:
     """Una huella normalizada (192 números) por cada trozo del audio."""
     partes = trozos(audio)
     if not partes:
         return np.zeros((0, 192), dtype=np.float32)
-    vecs = []
-    for p in partes:
-        emb = modelo().encode_batch(torch.from_numpy(p).unsqueeze(0)).squeeze()
-        vecs.append(emb.numpy())
+    vecs = [huella_trozo(p) for p in partes]
     vecs = np.stack(vecs).astype(np.float32)
     return vecs / np.linalg.norm(vecs, axis=1, keepdims=True)
