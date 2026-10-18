@@ -25,7 +25,8 @@ def main():
         return
     api.create_repo(repo, repo_type="dataset", private=True, exist_ok=True)
     api.upload_folder(repo_id=repo, repo_type="dataset", folder_path=RAIZ / "data", commit_message="Copia de datos",
-                            ignore_patterns=["podcasts/audio/**", "ruidos/**", "**/*.part", "respuestas.json"])
+                            ignore_patterns=["podcasts/audio/**", "entrevistas/audio/**", "ruidos/**", "cache_huellas/**",
+                                             "cache_indice_vb/**", "**/*.part", "respuestas.json"])
     print(f"Copia subida a https://huggingface.co/datasets/{repo} (privado)")
 
 
