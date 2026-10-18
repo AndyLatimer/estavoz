@@ -71,6 +71,14 @@
   .pista input:focus { border-color: var(--gris); }
   .pista input::placeholder { color: #6f6556; }
   .pista .nota { font: 11px/1.5 var(--mono); color: var(--gris); margin-top: 6px; min-height: 1.5em; }
+  .sugerencias { display: grid; gap: 4px; margin-top: 6px; }
+  .sugerencias button { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; text-align: left; cursor: pointer;
+                        padding: 9px 12px; border-radius: 4px; border: 1px solid var(--linea); background: var(--cabina); color: var(--papel); }
+  .sugerencias button:active { border-color: var(--gris); }
+  .sugerencias .tipo { grid-column: 1 / -1; font: 600 10px var(--mono); letter-spacing: .14em; color: var(--gris); }
+  .sugerencias .txt { font: italic 17px var(--serif); }
+  .sugerencias .n { font: 11px var(--mono); color: var(--gris); align-self: center; }
+  .acierto-pista { background: rgba(229,50,45,.08); margin: 0 -8px; padding: 11px 8px !important; border-radius: 4px; }
 
   /* botón de grabación */
   .escena { position: relative; width: 240px; height: 240px; margin: 34px auto 16px; display: grid; place-items: center; }
@@ -167,7 +175,8 @@
 
   <div class="pista">
     <label for="obra">¿QUÉ ESTÁS VIENDO? <span style="font-weight:400">(OPCIONAL)</span></label>
-    <input id="obra" type="search" autocomplete="off" placeholder="Batman, Walking Dead, Daryl…">
+    <input id="obra" type="text" enterkeyhint="search" autocomplete="off" placeholder="Toy Story, Daryl Dixon, Christian Bale…">
+    <div class="sugerencias" id="sugerencias"></div>
     <div class="nota" id="notaObra">Si lo escribes, acierta mucho más.</div>
   </div>
 
@@ -315,48 +324,82 @@ function puntuar(consulta, top = 3, candidatos = null) {
   return lista.sort((x, y) => y.parecido - x.parecido).slice(0, top);
 }
 
-// "¿Qué estás viendo?": palabra -> actores con esa palabra en sus trabajos (despliegue/exportar_web.py)
-const VACIAS = new Set(`de del la las el los lo un una unos unas y e o u en a al con por para sin su sus the of and to in on
-at an mi tu se que es temporada serie tv miniserie videojuego capitulo episodio especial parte vol volumen
-pelicula film documental animacion cortometraje version doblaje redoblaje ii iii iv vi vii viii ix`.split(/\s+/));
+// "¿Qué estás viendo?": obras, personajes y actores originales con su reparto (despliegue/exportar_web.py)
+const TIPOS = { obra: 'OBRA', personaje: 'PERSONAJE', actor: 'ACTOR ORIGINAL' };
+const plano = t => ' ' + t.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() + ' ';
 let busqueda = null;
-const cargarBusqueda = () => busqueda ??= fetch('datos/busqueda.json').then(r => r.json());
+// se descarga al tocar el campo; el texto normalizado se prepara una sola vez
+const cargarBusqueda = () => busqueda ??= fetch('datos/busqueda.json').then(r => r.json())
+  .then(es => es.map(([tipo, texto, ids]) => ({ tipo, texto, ids, plano: plano(texto) })));
 
-function palabras(texto) {
-  const t = texto.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-  return [...new Set(t.match(/[a-z0-9]+/g) || [])].filter(w => (w.length >= 3 || /^\d+$/.test(w)) && !VACIAS.has(w));
-}
-
-// Actores que tienen todas las palabras (la última puede estar a medio escribir)
-async function candidatosPara(texto) {
-  const ws = palabras(texto);
-  if (!ws.length) return null;
-  const indice = await cargarBusqueda();
-  let total = null;
-  for (const [n, w] of ws.entries()) {
-    let ids = indice[w];
-    if (!ids && n === ws.length - 1) {
-      ids = [...new Set(Object.keys(indice).filter(k => k.startsWith(w)).flatMap(k => indice[k]))];
-    }
-    const conjunto = new Set(ids || []);
-    total = total ? new Set([...total].filter(i => conjunto.has(i))) : conjunto;
+// Entradas cuyo texto contiene todas las palabras escritas (al principio de alguna de sus palabras)
+async function sugerencias(texto, max = 6) {
+  const q = plano(texto).trim();
+  if (q.length < 2) return [];
+  const ws = q.split(' ');
+  const es = await cargarBusqueda();
+  const exactas = [], resto = [];
+  for (const e of es) {
+    if (!ws.every(w => e.plano.includes(' ' + w))) continue;
+    (e.plano.trim() === q ? exactas : resto).push(e);   // primero lo que coincide del todo
+    if (exactas.length + resto.length > 400) break;     // ya están ordenadas por importancia
   }
-  return total;
+  return [...exactas, ...resto].slice(0, max);
 }
 
-const obra = $('obra'), notaObra = $('notaObra');
-let pistaTimer;
+const obra = $('obra'), notaObra = $('notaObra'), listaSug = $('sugerencias');
+let pistaElegida = null, pistaTimer;
 obra.addEventListener('focus', cargarBusqueda, { once: true });
 obra.addEventListener('input', () => {
+  pistaElegida = null;
   clearTimeout(pistaTimer);
   pistaTimer = setTimeout(async () => {
-    if (!obra.value.trim()) { notaObra.textContent = 'Si lo escribes, acierta mucho más.'; return; }
-    const c = await candidatosPara(obra.value);
-    notaObra.textContent = !c ? 'Escribe un poco más…'
-      : c.size ? `Buscaré entre ${c.size} ${c.size === 1 ? 'voz' : 'voces'} de «${obra.value.trim()}».`
-      : `No encuentro «${obra.value.trim()}»: buscaré entre todas las voces.`;
-  }, 250);
+    if (!obra.value.trim()) { listaSug.innerHTML = ''; notaObra.textContent = 'Si lo escribes, acierta mucho más.'; return; }
+    notaObra.textContent = 'Buscando…';
+    const ss = await sugerencias(obra.value);
+    listaSug.innerHTML = ss.map((e, k) => `<button type="button" data-k="${k}">
+        <span class="tipo">${TIPOS[e.tipo]}</span><span class="txt">${esc(e.texto)}</span>
+        <span class="n">${e.ids.length} ${e.ids.length === 1 ? 'voz' : 'voces'}</span></button>`).join('');
+    listaSug.querySelectorAll('button').forEach(b => b.onclick = () => elegir(ss[+b.dataset.k]));
+    notaObra.textContent = ss.length ? 'Toca la que sea para afinar todavía más.' : `No encuentro «${obra.value.trim()}»: buscaré entre todas las voces.`;
+  }, 200);
 });
+
+function elegir(e) {
+  pistaElegida = e;
+  obra.value = e.texto;
+  listaSug.innerHTML = '';
+  notaObra.textContent = `Buscaré entre ${e.ids.length} ${e.ids.length === 1 ? 'voz' : 'voces'} de «${e.texto}».`;
+  obra.blur();
+}
+
+// Lo escrito sin elegir sugerencia: se juntan los repartos de las que encajan
+async function pistaActual() {
+  if (pistaElegida) return pistaElegida;
+  if (!obra.value.trim()) return null;
+  const ss = await sugerencias(obra.value, 40);
+  if (!ss.length) return null;
+  return { tipo: 'texto', texto: obra.value.trim(), ids: [...new Set(ss.flatMap(e => e.ids))], partes: ss };
+}
+
+// Qué papel de este doblador encaja con la pista ("Buzz Lightyear en Toy Story 4")
+async function papelDePista(indice, pista) {
+  if (!pista) return null;
+  try {
+    const filas = await fetch(`datos/papeles/${indice}.json`).then(r => r.json());
+    const encaja = (e, [obraT, personaje, , original]) => {
+      const q = plano(e.texto).trim();
+      const t = e.tipo === 'obra' ? obraT : e.tipo === 'personaje' ? personaje : original.split(',').reverse().join(' ');
+      return plano(t).includes(' ' + q);
+    };
+    const opciones = pista.tipo === 'texto' ? pista.partes : [pista];
+    for (const e of opciones) {
+      const f = filas.filter(r => encaja(e, r)).sort((a, b) => (b[2] || 0) - (a[2] || 0))[0];
+      if (f) return { personaje: f[1], obra: f[0], anio: f[2] };
+    }
+  } catch (e) { console.error(e); }
+  return null;
+}
 
 const PILOTO = { grabando: 'GRABANDO', analizando: 'ANALIZANDO' };
 function modo(m) { sala.className = m || ''; $('piloto').textContent = PILOTO[m] || 'EN SILENCIO'; }
@@ -369,9 +412,11 @@ async function identificar(blob, huellasListas = null) {
     const consulta = huellasListas ? await huellasListas : await huellasDe(await a16k(blob));
     if (!consulta.length) throw new Error('corto');
     ultimaConsulta = consulta;
-    const candidatos = await candidatosPara(obra.value);
-    ultimaPista = candidatos && candidatos.size ? { texto: obra.value.trim(), n: candidatos.size } : null;
-    pintar(puntuar(consulta, 3, ultimaPista ? candidatos : null));
+    const pista = await pistaActual();
+    ultimaPista = pista && pista.ids.length ? { texto: pista.texto, n: pista.ids.length } : null;
+    const lista = puntuar(consulta, 3, ultimaPista ? pista.ids : null);
+    lista[0].papelPista = await papelDePista(actores.indexOf(actores.find(a => a.id === lista[0].id)), pista);
+    pintar(lista);
   } catch (e) {
     console.error(e);
     estado.textContent = e.message === 'corto' ? 'Toma muy corta: necesito al menos 3 segundos.' : 'No he podido leer ese audio.';
@@ -526,7 +571,8 @@ function pintar(lista) {
   ultimo = top;
   estado.textContent = pct >= 50 ? '¡Corten! La tenemos.' : 'Toma dudosa… ¿será alguno de estos?';
   const encendidos = Math.round(pct / 5);
-  const papeles = (top.trabajos || []).slice(0, 4).map(papel);
+  let papeles = (top.trabajos || []).slice(0, 4).map(papel);
+  if (top.papelPista) papeles = [{ ...top.papelPista, destacado: true }, ...papeles.filter(p => p.obra !== top.papelPista.obra)].slice(0, 4);
   res.dataset.otros = JSON.stringify(otros.map(o => ({ id: o.id, nombre: o.nombre })));
   res.innerHTML = `
     <article class="ficha principal">
@@ -546,7 +592,7 @@ function pintar(lista) {
       </div>
       ${papeles.length ? `<div class="rotulo" style="margin-top:24px"><span>LE HAS OÍDO COMO</span></div>
       <ul class="guion">${papeles.map(p => `
-        <li><span class="personaje">${esc(p.personaje)}</span>
+        <li class="${p.destacado ? 'acierto-pista' : ''}"><span class="personaje">${esc(p.personaje)}</span>
             <span class="obra">${esc(p.obra)}${p.anio ? ' · ' + p.anio : ''}</span></li>`).join('')}
       </ul>` : ''}
       <div class="acciones">
