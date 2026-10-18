@@ -68,7 +68,13 @@
   .pista label { font: 600 11px var(--mono); letter-spacing: .16em; color: var(--gris); display: block; margin-bottom: 8px; }
   .pista input { width: 100%; padding: 13px 14px; border-radius: 4px; border: 1px solid var(--linea); background: var(--cabina);
                  color: var(--papel); font: italic 18px var(--serif); outline: none; }
-  .pista input:focus { border-color: var(--gris); }
+  .pista input { border-color: rgba(229,50,45,.45); }
+  .pista input:focus { border-color: var(--rojo); }
+  .pista .recomendado { color: var(--rojo); font-weight: 600; letter-spacing: .12em; margin-left: 6px; }
+  .sin-pista { margin-top: 18px; padding: 12px 14px; border: 1px dashed rgba(229,50,45,.5); border-radius: 4px; }
+  .sin-pista p { margin: 0 0 10px; font: italic 17px/1.35 var(--serif); }
+  .sin-pista button { font: 600 12px var(--mono); letter-spacing: .08em; padding: 10px 14px; border-radius: 4px; cursor: pointer;
+                      background: transparent; color: var(--papel); border: 1px solid var(--rojo); }
   .pista input::placeholder { color: #6f6556; }
   .pista .nota { font: 11px/1.5 var(--mono); color: var(--gris); margin-top: 6px; min-height: 1.5em; }
   .sugerencias { display: grid; gap: 4px; margin-top: 6px; }
@@ -171,13 +177,13 @@
   </div>
 
   <h1>¿Quién pone<br><em>esa voz</em><b>?</b></h1>
-  <p class="indicacion">Acerca el móvil a la tele y pulsa el botón rojo.</p>
+  <p class="indicacion">Escribe qué estás viendo, acerca el móvil a la tele y pulsa el botón rojo.</p>
 
   <div class="pista">
-    <label for="obra">¿QUÉ ESTÁS VIENDO? <span style="font-weight:400">(OPCIONAL)</span></label>
+    <label for="obra">¿QUÉ ESTÁS VIENDO? <span class="recomendado">MUY RECOMENDADO</span></label>
     <input id="obra" type="text" enterkeyhint="search" autocomplete="off" placeholder="Toy Story, Daryl Dixon, Christian Bale…">
     <div class="sugerencias" id="sugerencias"></div>
-    <div class="nota" id="notaObra">Si lo escribes, acierta mucho más.</div>
+    <div class="nota" id="notaObra">Película, serie, personaje o actor original. Con esto acierta casi siempre.</div>
   </div>
 
   <div class="escena">
@@ -366,7 +372,7 @@ obra.addEventListener('input', () => {
   pistaElegida = null;
   clearTimeout(pistaTimer);
   pistaTimer = setTimeout(async () => {
-    if (!obra.value.trim()) { listaSug.innerHTML = ''; notaObra.textContent = 'Si lo escribes, acierta mucho más.'; return; }
+    if (!obra.value.trim()) { listaSug.innerHTML = ''; notaObra.textContent = 'Película, serie, personaje o actor original. Con esto acierta casi siempre.'; return; }
     notaObra.textContent = 'Buscando…';
     const ss = await sugerencias(obra.value);
     listaSug.innerHTML = ss.map((e, k) => `<button type="button" data-k="${k}">
@@ -383,6 +389,14 @@ function elegir(e) {
   listaSug.innerHTML = '';
   notaObra.textContent = `Buscaré entre ${e.ids.length} ${e.ids.length === 1 ? 'voz' : 'voces'} de «${e.texto}».`;
   obra.blur();
+  // si ya hay una toma, se vuelve a mirar con la pista sin tener que grabar otra vez
+  if (ultimaConsulta && !btn.disabled) { notaObra.textContent += ' Vuelvo a mirar tu última toma…'; resolver(ultimaConsulta); }
+}
+
+function pedirPista() {
+  obra.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  obra.focus();
+  notaObra.textContent = 'Escribe qué estás viendo y elige una opción: miraré otra vez la misma toma.';
 }
 
 // Lo escrito sin elegir sugerencia: se juntan los repartos de las que encajan
@@ -416,6 +430,15 @@ async function papelDePista(indice, pista) {
 const PILOTO = { grabando: 'GRABANDO', analizando: 'ANALIZANDO' };
 function modo(m) { sala.className = m || ''; $('piloto').textContent = PILOTO[m] || 'EN SILENCIO'; }
 
+// Quién es, con la pista si la hay, y la ficha en pantalla
+async function resolver(consulta) {
+  const pista = await pistaActual();
+  ultimaPista = pista && pista.ids.length ? { texto: pista.texto, n: pista.ids.length } : null;
+  const lista = puntuar(consulta, 3, ultimaPista ? pista.ids : null);
+  lista[0].papelPista = await papelDePista(actores.indexOf(actores.find(a => a.id === lista[0].id)), pista);
+  pintar(lista);
+}
+
 async function identificar(blob, huellasListas = null) {
   modo('analizando');
   estado.textContent = 'Escuchando la toma…';
@@ -424,11 +447,7 @@ async function identificar(blob, huellasListas = null) {
     const consulta = huellasListas ? await huellasListas : await huellasDe(await a16k(blob));
     if (!consulta.length) throw new Error('corto');
     ultimaConsulta = consulta;
-    const pista = await pistaActual();
-    ultimaPista = pista && pista.ids.length ? { texto: pista.texto, n: pista.ids.length } : null;
-    const lista = puntuar(consulta, 3, ultimaPista ? pista.ids : null);
-    lista[0].papelPista = await papelDePista(actores.indexOf(actores.find(a => a.id === lista[0].id)), pista);
-    pintar(lista);
+    await resolver(consulta);
   } catch (e) {
     console.error(e);
     estado.textContent = e.message === 'corto' ? 'Toma muy corta: necesito al menos 3 segundos.' : 'No he podido leer ese audio.';
@@ -594,6 +613,9 @@ function pintar(lista) {
         <li class="${p.destacado ? 'acierto-pista' : ''}"><span class="personaje">${esc(p.personaje)}</span>
             <span class="obra">${esc(p.obra)}${p.anio ? ' · ' + p.anio : ''}</span></li>`).join('')}
       </ul>` : ''}
+      ${ultimaPista ? '' : `<div class="sin-pista">
+        <p>${pct >= 50 ? '¿Quieres asegurarte?' : '¿No es?'} Dime qué estás viendo y vuelvo a mirar esta misma toma.</p>
+        <button onclick="pedirPista()">Decir qué estoy viendo</button></div>`}
       <div class="acciones">
         <button class="prim" onclick="btn.click()">Otra toma</button>
         <button onclick="compartir()">Compartir</button>
