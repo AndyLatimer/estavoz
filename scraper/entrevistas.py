@@ -212,7 +212,8 @@ def validar(minimo: float = 0.4):
         ref = original & (y == actor)
         parecido = float(centro(c == clip) @ centro(ref)) if ref.any() else 0.0
         if parecido < minimo:
-            (ACTORES / clip).unlink(missing_ok=True)
+            ruta = ACTORES / actor / "clips" / clip.split("/", 1)[1]   # en el índice: "actor/archivo"
+            ruta.unlink(missing_ok=True)
             quitados += 1
             print(f"fuera {clip} (parecido {parecido:.2f})")
     print(f"{quitados} clips de entrevista quitados")
