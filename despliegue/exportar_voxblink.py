@@ -5,7 +5,7 @@ sencillas (convolución para trocear, matrices para la DFT) con los mismos pasos
 tramas de 400 muestras cada 160, quitar la media, preénfasis 0.97, ventana de Hamming, FFT de 512,
 potencia, 80 bancos mel, logaritmo y media restada (CMN).
 
-Uso: .venv/bin/python despliegue/exportar_voxblink.py  ->  frontend/modelo/voxblink-int8.onnx
+Uso: .venv/bin/python despliegue/exportar_voxblink.py [r34|r100]  ->  frontend/modelo/voxblink[-r100]-int8.onnx
 """
 import sys
 from pathlib import Path
@@ -49,30 +49,32 @@ class FbankKaldi(nn.Module):
 
 
 class VozNavegador(nn.Module):
-    def __init__(self):
+    def __init__(self, variante="r34"):
         super().__init__()
         self.fbank = FbankKaldi()
-        self.red = voxblink.modelo()
+        self.red = voxblink.modelo(variante)
 
     def forward(self, wav):
         return self.red(self.fbank(wav)[None])
 
 
 def main():
-    net = VozNavegador().eval()
+    variante = sys.argv[1] if len(sys.argv) > 1 else "r34"
+    sufijo = "" if variante == "r34" else f"-{variante}"
+    net = VozNavegador(variante).eval()
     wav = torch.randn(1, 16000 * 6) * 0.1
     with torch.no_grad():
         a = voxblink.fbank(wav[0].numpy())
         b = net.fbank(wav)
     print(f"fbank: diferencia máxima con Kaldi {float((a - b).abs().max()):.2e}")
 
-    salida = RAIZ / "frontend" / "modelo" / "voxblink.onnx"
+    salida = RAIZ / "frontend" / "modelo" / f"voxblink{sufijo}.onnx"
     torch.onnx.export(net, (wav,), str(salida), input_names=["wav"], output_names=["huella"],
                       dynamic_axes={"wav": {1: "muestras"}}, opset_version=17, dynamo=False)
 
     from onnxruntime.quantization import QuantType, quantize_dynamic
     import onnxruntime as ort
-    final = salida.with_name("voxblink-int8.onnx")
+    final = salida.with_name(f"voxblink{sufijo}-int8.onnx")
     # el fbank necesita precisión completa: comprimirlo a 8 bits destroza la huella (parecido 0,2)
     import onnx
     fbank = [n.name for n in onnx.load(str(salida)).graph.node if "fbank" in n.name.lower()]
@@ -83,7 +85,7 @@ def main():
         cs = []
         for seg in (3, 6, 10):
             w = torch.randn(16000 * seg) * 0.1
-            ref = voxblink.huella(w.numpy())
+            ref = voxblink.huella(w.numpy(), variante)
             h = s.run(None, {"wav": w[None].numpy()})[0][0]
             cs.append(float(ref @ h / np.linalg.norm(ref) / np.linalg.norm(h)))
         print(f"{ruta.name} ({ruta.stat().st_size / 1e6:.0f} MB): parecido con el original {min(cs):.4f}")

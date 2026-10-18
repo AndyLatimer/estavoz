@@ -13,7 +13,9 @@ import torch.nn as nn
 import torchaudio.compliance.kaldi as kaldi
 
 RAIZ = Path(__file__).resolve().parent.parent
-PESOS = RAIZ / "modelos" / "voxblink2" / "avg_model.pt"
+PESOS = {"r34": RAIZ / "modelos" / "voxblink2" / "avg_model.pt",          # SimAM-ResNet34
+         "r100": RAIZ / "modelos" / "voxblink2-r100" / "avg_model.pt"}    # SimAM-ResNet100 (bzikst/voxblink2_samresnet100_ft)
+BLOQUES = {"r34": (3, 4, 6, 3), "r100": (6, 16, 24, 3)}
 
 
 class BloqueSimAM(nn.Module):
@@ -76,9 +78,9 @@ class ASP(nn.Module):
 
 
 class SimAMResNet34(nn.Module):
-    def __init__(self, mel=80, dim=256):
+    def __init__(self, mel=80, dim=256, bloques=(3, 4, 6, 3)):
         super().__init__()
-        self.front = ResNet()
+        self.front = ResNet(bloques=bloques)
         self.pooling = ASP(512 * mel // 8)
         self.bottleneck = nn.Linear(512 * mel // 8 * 2, dim)
 
@@ -87,10 +89,10 @@ class SimAMResNet34(nn.Module):
         return self.bottleneck(self.pooling(self.front(x)))
 
 
-@lru_cache(maxsize=1)
-def modelo():
-    m = SimAMResNet34()
-    m.load_state_dict(torch.load(PESOS, map_location="cpu", weights_only=False))
+@lru_cache(maxsize=2)
+def modelo(variante: str = "r34"):
+    m = SimAMResNet34(bloques=BLOQUES[variante])
+    m.load_state_dict(torch.load(PESOS[variante], map_location="cpu", weights_only=False))
     return m.eval()
 
 
@@ -103,15 +105,15 @@ def fbank(audio: np.ndarray) -> torch.Tensor:
 
 
 @torch.no_grad()
-def huella(audio: np.ndarray) -> np.ndarray:
-    return modelo()(fbank(audio)[None])[0].numpy()
+def huella(audio: np.ndarray, variante: str = "r34") -> np.ndarray:
+    return modelo(variante)(fbank(audio)[None])[0].numpy()
 
 
-def huellas(audio: np.ndarray) -> np.ndarray:
+def huellas(audio: np.ndarray, variante: str = "r34") -> np.ndarray:
     """Una huella normalizada por cada trozo de 6 s (como voz.huellas)."""
     from voz import trozos
     partes = trozos(audio)
     if not partes:
         return np.zeros((0, 256), dtype=np.float32)
-    v = np.stack([huella(p) for p in partes]).astype(np.float32)
+    v = np.stack([huella(p, variante) for p in partes]).astype(np.float32)
     return v / np.linalg.norm(v, axis=1, keepdims=True)

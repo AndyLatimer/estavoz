@@ -256,7 +256,127 @@ def comparar_modelos():
         print(f"  {nombre:<26} móvil 10 s: {a1:5.1f}%  top3 {a3:5.1f}%   ({k} consultas)", flush=True)
 
 
-if __name__ == "__main__" and sys.argv[1:2] == ["modelos"]:
+def cargar_vb():
+    """Clips con las huellas VoxBlink2 de la comparación de modelos: (actor, limpio+móvil, consultas de móvil)."""
+    salida = RAIZ / "data" / "cache_huellas" / "comparar"
+    clips = []
+    for f in sorted(salida.glob("*.npz")):
+        d = np.load(f)
+        actor = f.stem.split("__")[0]
+        todo = np.concatenate([d["vb_todo"], d["vb_aum"]]) if len(d["vb_aum"]) else d["vb_todo"]
+        qs = [d[k] for k in d.files if k.startswith("vb_q") and len(d[k])]
+        if len(todo):
+            clips.append((actor, todo, qs))
+    return clips
+
+
+def entrenar_adaptador(X, y, dim=256, epocas=60, margen=0.2, escala=30.0, semilla=0):
+    """Pequeña red (256 -> 512 -> dim) entrenada con AAM-softmax para separar a los dobladores."""
+    import torch
+    import torch.nn as nn
+    torch.manual_seed(semilla)
+    clases = {c: i for i, c in enumerate(sorted(set(y)))}
+    t = torch.tensor(np.array([clases[c] for c in y]))
+    Xt = torch.tensor(X, dtype=torch.float32)
+    red = nn.Sequential(nn.Linear(X.shape[1], 512), nn.BatchNorm1d(512), nn.ReLU(), nn.Dropout(0.2), nn.Linear(512, dim))
+    W = nn.Parameter(torch.randn(len(clases), dim) * 0.01)
+    opt = torch.optim.AdamW(list(red.parameters()) + [W], lr=2e-3, weight_decay=1e-3)
+    for _ in range(epocas):
+        perm = torch.randperm(len(Xt))
+        for i in range(0, len(Xt), 256):
+            b = perm[i:i + 256]
+            e = nn.functional.normalize(red(Xt[b]), dim=1)
+            cos = e @ nn.functional.normalize(W, dim=1).T
+            ang = torch.acos(cos.clamp(-1 + 1e-6, 1 - 1e-6))
+            logits = escala * torch.where(nn.functional.one_hot(t[b], len(clases)).bool(), torch.cos(ang + margen), cos)
+            loss = nn.functional.cross_entropy(logits, t[b])
+            opt.zero_grad(); loss.backward(); opt.step()
+    red.eval()
+    return lambda x: (lambda v: v / np.linalg.norm(v, axis=-1, keepdims=True))(red(torch.tensor(x, dtype=torch.float32)).detach().numpy()) if len(x) else x
+
+
+def evaluar_proyeccion(clips, entrenar, pliegues=5, semilla=0):
+    """Como evaluar_lda, pero con cualquier proyección entrenada solo con los dobladores de los otros pliegues."""
+    actores = sorted({a for a, _, _ in clips})
+    rng = np.random.default_rng(semilla)
+    pliegue = dict(zip(actores, rng.integers(0, pliegues, len(actores))))
+    top1 = top3 = n = 0
+    for p in range(pliegues):
+        entreno = [(a, t) for a, t, _ in clips if pliegue[a] != p]
+        Xe = np.concatenate([t for _, t in entreno]); ye = np.concatenate([[a] * len(t) for a, t in entreno])
+        proy = entrenar(Xe, ye)
+        clips_p = [(a, proy(t), [proy(q) for q in qs] if pliegue[a] == p else []) for a, t, qs in clips]
+        a1, a3, k = evaluar(clips_p, metodo="centroide")
+        top1 += a1 * k / 100; top3 += a3 * k / 100; n += k
+    return 100 * top1 / n, 100 * top3 / n, n
+
+
+def principal_mejoras():
+    clips = cargar_vb()
+    print(f"{len({a for a, _, _ in clips})} actores, {len(clips)} clips, {sum(len(q) for _, _, q in clips)} consultas")
+
+    def lda(X, y, dims=None):
+        from lda import entrenar_lda, proyectar
+        mu, W = entrenar_lda(X, y, dims)
+        return lambda x: proyectar(x, mu, W) if len(x) else x
+    pruebas = [
+        ("LDA (actual)", lambda X, y: lda(X, y)),
+        ("LDA 200 dimensiones", lambda X, y: lda(X, y, 200)),
+        ("LDA 150 dimensiones", lambda X, y: lda(X, y, 150)),
+        ("adaptador AAM 256", lambda X, y: entrenar_adaptador(X, y)),
+        ("adaptador AAM 256 + LDA", lambda X, y: (lambda f: (lambda g: lambda x: g(f(x)) if len(x) else x)(lda(f(X), y)))(entrenar_adaptador(X, y))),
+    ]
+    for nombre, f in pruebas:
+        a1, a3, k = evaluar_proyeccion(clips, f)
+        print(f"  {nombre:<28} {a1:5.1f}%  top3 {a3:5.1f}%   ({k} consultas)", flush=True)
+
+
+def comparar_r100(n_actores=250):
+    """SimAM-ResNet34 frente a ResNet100 (VoxBlink2), con exactamente el mismo audio de móvil simulado
+    que la comparación de modelos, sobre un subconjunto de dobladores (sin aumento, igual para los dos)."""
+    import voxblink
+    from simular_movil import movil
+    from voz import SAMPLE_RATE, cargar_audio
+    origen = RAIZ / "data" / "cache_huellas" / "comparar"
+    salida = RAIZ / "data" / "cache_huellas" / "r100"
+    salida.mkdir(parents=True, exist_ok=True)
+    nombres = sorted(f for f in (RAIZ / "data" / "cache_huellas" / "normal-onnx").glob("*.npz") if np.load(f)["todo"].size)
+    actores = sorted({f.stem.split("__")[0] for f in nombres})
+    elegidos = set(np.random.default_rng(0).choice(actores, n_actores, replace=False))
+    rng_aum, rng_q = np.random.default_rng(1), np.random.default_rng(10)
+    for f in nombres:   # mismo orden y mismas llamadas aleatorias que comparar_modelos()
+        actor, nombre = f.stem.split("__")
+        audio = cargar_audio(RAIZ / "data" / "actores" / actor / "clips" / f"{nombre}.mp3", max_seg=90)
+        movil(audio, rng_aum)
+        paso = 10 * SAMPLE_RATE
+        qs = [movil(audio[i:i + paso], rng_q) for i in range(0, max(len(audio) - paso, 1), paso)][:2]
+        destino = salida / f.name
+        if actor not in elegidos or destino.exists():
+            continue
+        d = {"todo": voxblink.huellas(audio, "r100")}
+        for i, q in enumerate(qs):
+            d[f"q{i}"] = voxblink.huellas(q, "r100")
+        np.savez(destino, **d)
+        print(f"  {f.stem}", flush=True)
+
+    r34, r100 = [], []
+    for f in nombres:
+        actor = f.stem.split("__")[0]
+        if actor not in elegidos:
+            continue
+        a, b = np.load(origen / f.name), np.load(salida / f.name)
+        r34.append((actor, a["vb_todo"], [a[k] for k in a.files if k.startswith("vb_q") and len(a[k])]))
+        r100.append((actor, b["todo"], [b[k] for k in b.files if k.startswith("q") and len(b[k])]))
+    for nombre, clips in (("ResNet34 (actual)", r34), ("ResNet100", r100)):
+        a1, a3, k = evaluar_lda(clips, dims=256, metodo="centroide", pliegues=5, reg=1e-2)
+        print(f"  {nombre:<18} {n_actores} dobladores, móvil 10 s: {a1:5.1f}%  top3 {a3:5.1f}%   ({k} consultas)", flush=True)
+
+
+if __name__ == "__main__" and sys.argv[1:2] == ["r100"]:
+    comparar_r100()
+elif __name__ == "__main__" and sys.argv[1:2] == ["mejoras"]:
+    principal_mejoras()
+elif __name__ == "__main__" and sys.argv[1:2] == ["modelos"]:
     comparar_modelos()
 elif __name__ == "__main__" and sys.argv[1:2] == ["duracion"]:
     principal_duracion()
