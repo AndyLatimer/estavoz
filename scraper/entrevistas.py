@@ -4,6 +4,7 @@ Pasos:
   .venv/bin/python scraper/entrevistas.py buscar [--max-actores 150]   # episodios con su nombre en el título
   .venv/bin/python scraper/entrevistas.py descargar                    # primeros 15 min de cada uno
   ESTAVOZ_ONNX=modelos/ecapa-int8.onnx .venv/bin/python scraper/entrevistas.py extraer
+  (indexar) .venv/bin/python scraper/entrevistas.py validar          # quita los clips con la voz equivocada
 
 Cómo se sabe qué voz es la del doblador: en cada episodio se separan las voces (agrupando trozos de 6 s
 que se parecen). El presentador cambia de un programa a otro, pero el invitado es el mismo, así que la
@@ -135,8 +136,15 @@ def extraer():
     datos = np.load(RAIZ / "data" / "indice_ecapa.npz")   # muestras actuales, con el mismo modelo (ECAPA)
     X, y = datos["vectores"], datos["etiquetas"]
     paso = 6 * SAMPLE_RATE
+    analizados_f = DIR / "analizados.json"
+    analizados = set(json.loads(analizados_f.read_text())) if analizados_f.exists() else set()
+
+    def marcar(slug):
+        analizados.add(slug)
+        analizados_f.write_text(json.dumps(sorted(analizados)))
+
     for slug, eps in hechos.items():
-        if list((ACTORES / slug / "clips").glob("entrevista_*.wav")) or not eps:
+        if slug in analizados or list((ACTORES / slug / "clips").glob("entrevista_*.wav")) or not eps:
             continue
         episodios = []   # (audio, huellas, grupos)
         for i in range(len(eps)):
@@ -150,10 +158,12 @@ def extraer():
             h = huellas(audio)
             episodios.append((audio, h, voces(h)))
         if not episodios:
+            marcar(slug)
             continue
         centro = lambda h, g: (lambda m: m / np.linalg.norm(m))(h[g].mean(0))
         candidatos = [(e, g) for e, (_, h, gs) in enumerate(episodios) for g in gs]
         if not candidatos:
+            marcar(slug)
             continue
         # parecido de cada voz de cada episodio con las voces de los OTROS episodios
         puntos = []
@@ -175,6 +185,7 @@ def extraer():
         print(f"{slug}: {len(episodios)} episodios, voz elegida en ep. {e} ({len(g) * 6} s) "
               f"repetida {repetida:.2f} muestra {muestra:.2f} -> {'SÍ' if fiable else 'no'}", flush=True)
         if not fiable:
+            marcar(slug)
             continue
         # se guardan los trozos de esa voz en todos los episodios donde aparece
         c = centro(episodios[e][1], g)
@@ -183,11 +194,33 @@ def extraer():
             if len(trozos) >= 5:
                 voz_suya = np.concatenate([audio[i * paso:(i + 1) * paso] for i in trozos])
                 sf.write(ACTORES / slug / "clips" / f"entrevista_{k}.wav", voz_suya[: 90 * SAMPLE_RATE], SAMPLE_RATE)
+        marcar(slug)
+
+
+def validar(minimo: float = 0.4):
+    """Comprobación final con el índice (modelo nuevo): un clip de entrevista se queda solo si su voz
+    se parece a la muestra original del doblador (eldoblaje/podcast). A veces la voz que se repite
+    entre programas es la de un presentador o colaborador común, no la del doblador."""
+    datos = np.load(RAIZ / "data" / "indice.npz")
+    X, y, c = datos["vectores"], datos["etiquetas"], datos["clips"]
+    limpio = np.array(["#" not in x for x in c])
+    original = limpio & np.array(["entrevista_" not in x for x in c])
+    centro = lambda m: (lambda v: v / np.linalg.norm(v))(X[m].mean(0))
+    quitados = 0
+    for clip in sorted(set(c[limpio & ~original])):
+        actor = clip.split("/")[0]
+        ref = original & (y == actor)
+        parecido = float(centro(c == clip) @ centro(ref)) if ref.any() else 0.0
+        if parecido < minimo:
+            (ACTORES / clip).unlink(missing_ok=True)
+            quitados += 1
+            print(f"fuera {clip} (parecido {parecido:.2f})")
+    print(f"{quitados} clips de entrevista quitados")
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("paso", choices=["buscar", "descargar", "extraer"])
+    p.add_argument("paso", choices=["buscar", "descargar", "extraer", "validar"])
     p.add_argument("--max-actores", type=int, default=150)
     p.add_argument("--extra", default="108-jose-luis-gil,205-claudio-serrano,32-eduardo-bosch")
     a = p.parse_args()
@@ -195,5 +228,7 @@ if __name__ == "__main__":
         buscar(a.max_actores, a.extra.split(","))
     elif a.paso == "descargar":
         descargar()
+    elif a.paso == "validar":
+        validar()
     else:
         extraer()
