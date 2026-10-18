@@ -372,7 +372,131 @@ def comparar_r100(n_actores=250):
         print(f"  {nombre:<18} {n_actores} dobladores, móvil 10 s: {a1:5.1f}%  top3 {a3:5.1f}%   ({k} consultas)", flush=True)
 
 
-if __name__ == "__main__" and sys.argv[1:2] == ["r100"]:
+def largos(n_actores=250, parte=(0, 1)):
+    """¿Huellas de fragmentos más largos? ResNet100, 250 dobladores, audio de móvil simulado con una
+    semilla propia por clip (para poder repartir el trabajo entre procesos). Por cada clip:
+    consultas de 10 s troceadas en 6 + 4 s (como ahora) y enteras, y muestras en trozos de 6 s,
+    de 20 s y enteras (hasta 40 s, para que no tarde horas)."""
+    import zlib
+    import onnxruntime as ort
+    from simular_movil import movil
+    from voz import SAMPLE_RATE, cargar_audio
+    salida = RAIZ / "data" / "cache_huellas" / "r100-largos2"
+    salida.mkdir(parents=True, exist_ok=True)
+    nombres = sorted(f for f in (RAIZ / "data" / "cache_huellas" / "normal-onnx").glob("*.npz") if np.load(f)["todo"].size)
+    actores = sorted({f.stem.split("__")[0] for f in nombres})
+    elegidos = set(np.random.default_rng(0).choice(actores, n_actores, replace=False))
+    norma = lambda v: v / np.linalg.norm(v)
+    # el modelo comprimido de la web (ResNet100), un núcleo por proceso
+    opciones = ort.SessionOptions()
+    opciones.intra_op_num_threads = 1 if parte[1] > 1 else 4
+    sesion = ort.InferenceSession(str(RAIZ / "frontend" / "modelo" / "voxblink-int8.onnx"), opciones)
+    huella1 = lambda a: norma(sesion.run(None, {"wav": a[None].astype(np.float32)})[0][0])
+    from voz import trozos
+    class voxblink:  # misma interfaz que backend/voxblink.py, con el modelo ONNX
+        huella = staticmethod(lambda a, _v=None: huella1(a))
+        huellas = staticmethod(lambda a, _v=None: np.stack([huella1(t) for t in trozos(a)]) if trozos(a) else np.zeros((0, 256), np.float32))
+    for num, f in enumerate(nombres):
+        actor, nombre = f.stem.split("__")
+        destino = salida / f.name
+        if actor not in elegidos or destino.exists() or num % parte[1] != parte[0]:
+            continue
+        rng = np.random.default_rng(zlib.crc32(f.stem.encode()))
+        audio = cargar_audio(RAIZ / "data" / "actores" / actor / "clips" / f"{nombre}.mp3", max_seg=40)
+        paso = 10 * SAMPLE_RATE
+        qs = [movil(audio[i:i + paso], rng) for i in range(0, max(len(audio) - paso, 1), paso)][:2]
+        d = {"t6": voxblink.huellas(audio, "r100"), "entero": norma(voxblink.huella(audio, "r100"))[None]}
+        t20 = [t for t in (audio[i:i + 20 * SAMPLE_RATE] for i in range(0, len(audio), 20 * SAMPLE_RATE))
+               if len(t) >= 4 * SAMPLE_RATE] or [audio]
+        d["t20"] = np.stack([norma(voxblink.huella(t, "r100")) for t in t20])
+        for k, q in enumerate(qs):
+            if len(q) >= 2 * SAMPLE_RATE:
+                d[f"q6_{k}"] = voxblink.huellas(q, "r100")
+                d[f"q10_{k}"] = norma(voxblink.huella(q, "r100"))[None]
+        np.savez(destino, **d)
+        print(f"  {f.stem}", flush=True)
+    if parte[1] > 1:
+        return
+    combos = {}
+    for f in sorted(salida.glob("*.npz")):
+        b = np.load(f)
+        act = f.stem.split("__")[0]
+        q6 = [b[k] for k in b.files if k.startswith("q6_") and len(b[k])]
+        q10 = [b[k] for k in b.files if k.startswith("q10_")]
+        for nombre, ref, qs in (("muestras 6 s + consulta 6+4 s (actual)", b["t6"], q6),
+                                ("muestras 6 s + consulta 10 s entera", b["t6"], q10),
+                                ("muestras 20 s + consulta 10 s entera", b["t20"], q10),
+                                ("muestras enteras + consulta 10 s entera", b["entero"], q10),
+                                ("muestras 6 s y 20 s + consulta 10 s", np.concatenate([b["t6"], b["t20"]]), q10)):
+            combos.setdefault(nombre, []).append((act, ref, qs))
+    for nombre, clips in combos.items():
+        a1, a3, k = evaluar_lda(clips, dims=256, metodo="centroide", pliegues=5, reg=1e-2)
+        print(f"  {nombre:<44} {a1:5.1f}%  top3 {a3:5.1f}%   ({k} consultas)", flush=True)
+
+
+def puntuacion():
+    """¿Cómo puntuar a cada actor? Con el índice real (todos los dobladores, limpio + #movil) y las
+    consultas de móvil de 10 s de "largos": parecido con la huella media, con los 3 trozos más
+    parecidos, o una mezcla. Resultado: la mezcla 50/50 gana ~1,5 puntos a la primera y ~3 en el top 3,
+    y la escala de parecido no cambia (sirve la misma traducción a porcentaje)."""
+    from lda import normaliza, proyectar
+    d = np.load(RAIZ / "data" / "indice.npz")
+    X, y, c = d["vectores"], d["etiquetas"], d["clips"]
+    base = np.array([x.split("#")[0] for x in c])
+    actores = sorted(set(y))
+    ia = {a: i for i, a in enumerate(actores)}
+    fa = np.array([ia[a] for a in y])
+    consultas = []
+    for f in sorted((RAIZ / "data" / "cache_huellas" / "r100-largos2").glob("*.npz")):
+        b = np.load(f)
+        act, nom = f.stem.split("__")
+        clip = f"{act}/{nom}.mp3"
+        if (base == clip).any() and ((y == act) & (base != clip)).any():
+            consultas += [(act, clip, b[k]) for k in b.files if k.startswith("q10_")]
+
+    def top3(s, filas):
+        out = np.full(len(actores), -1.0)
+        orden = np.lexsort((-s, fa[filas]))
+        fs, ss = fa[filas][orden], s[orden]
+        ini, fin = np.searchsorted(fs, np.arange(len(actores))), np.searchsorted(fs, np.arange(len(actores)), side="right")
+        for a in range(len(actores)):
+            if fin[a] > ini[a]:
+                out[a] = ss[ini[a]:min(fin[a], ini[a] + 3)].mean()
+        return out
+
+    pesos = (0, .25, .5, .75, 1)
+    res = {w: [0, 0, 0] for w in pesos}
+    n_clips = {a: len(set(base[y == a])) for a in actores}
+    qact = sorted({q[0] for q in consultas})
+    for semilla in range(2):
+        pl = dict(zip(qact, np.random.default_rng(semilla).integers(0, 5, len(qact))))
+        for p in range(5):
+            sel = np.isin(y, [a for a in actores if n_clips[a] >= 2 and pl.get(a, -1) != p])
+            mu, W = entrenar_lda(X[sel], y[sel])
+            V = proyectar(X, mu, W)
+            for act, clip, q in consultas:
+                if pl[act] != p:
+                    continue
+                real, filas = ia[act], np.flatnonzero(base != clip)
+                Q = proyectar(q, mu, W)
+                suma = np.zeros((len(actores), V.shape[1]))
+                np.add.at(suma, fa[filas], V[filas])
+                pc, pk = (Q @ normaliza(suma + 1e-9).T).mean(0), top3((Q @ V[filas].T).mean(0), filas)
+                for w in pesos:
+                    o = np.argsort(-(w * pc + (1 - w) * pk))
+                    res[w][0] += o[0] == real; res[w][1] += real in o[:3]; res[w][2] += 1
+    for w, (a1, a3, n) in res.items():
+        print(f"  {w:.0%} huella media + {1 - w:.0%} 3 mejores trozos: {100 * a1 / n:5.1f}%  top3 {100 * a3 / n:5.1f}%   ({n} consultas)")
+
+
+if __name__ == "__main__" and sys.argv[1:2] == ["largos"]:
+    import torch
+    if len(sys.argv) > 2:
+        torch.set_num_threads(1)
+    largos(parte=tuple(map(int, sys.argv[2].split("/"))) if len(sys.argv) > 2 else (0, 1))
+elif __name__ == "__main__" and sys.argv[1:2] == ["puntuacion"]:
+    puntuacion()
+elif __name__ == "__main__" and sys.argv[1:2] == ["r100"]:
     comparar_r100()
 elif __name__ == "__main__" and sys.argv[1:2] == ["mejoras"]:
     principal_mejoras()

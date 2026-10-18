@@ -3,6 +3,9 @@
 Genera en frontend/:
   datos/lda.bin         media (192) + matriz W (192 x 192) de la LDA, float32
   datos/centroides.bin  huella media de cada actor ya proyectada, float32 (actores x 192)
+  datos/trozos.bin      todas las huellas proyectadas, por actor: inicio de cada actor (uint32, actores + 1),
+                        escala de cada huella (float32) y la huella en int8. La web mezcla el parecido con
+                        la huella media y con los 3 trozos más parecidos de cada actor (+3 puntos de acierto)
   datos/actores.json    fichas, en el mismo orden que los centroides
   datos/busqueda.json   obras, personajes y actores originales con su reparto ("¿Qué estás viendo?")
   datos/papeles/<n>.json  trabajos completos de cada doblador
@@ -133,6 +136,7 @@ def main():
     sel = np.isin(y, [a for a in slugs if n_clips[a] >= 2])
     mu, W = entrenar_lda(X[sel], y[sel])
     C = centroides(proyectar(X, mu, W), y, slugs)
+    Xt, yt = X, y
 
     # lo que han enseñado los usuarios entra en la huella media de cada actor
     Xr, yr = respuestas_validas(mu, W, C, slugs)
@@ -144,7 +148,8 @@ def main():
             vistos[a] = vistos.get(a, 0) + 1
             tope[i] = vistos[a] <= propios[a]
         Xr, yr = Xr[tope], yr[tope]
-        C = centroides(proyectar(np.concatenate([X, Xr]), mu, W), np.concatenate([y, yr]), slugs)
+        Xt, yt = np.concatenate([X, Xr]), np.concatenate([y, yr])
+        C = centroides(proyectar(Xt, mu, W), yt, slugs)
         print(f"Respuestas de usuarios usadas: {len(yr)} huellas de {len(set(yr))} actores")
 
     salida = RAIZ / "frontend" / "datos"
@@ -152,6 +157,14 @@ def main():
     salida.mkdir(parents=True)
     np.concatenate([mu, W.ravel()]).astype("<f4").tofile(salida / "lda.bin")
     C.astype("<f4").tofile(salida / "centroides.bin")
+    orden = np.argsort(np.searchsorted(slugs, yt), kind="stable")
+    V = proyectar(Xt[orden], mu, W)
+    escala = np.abs(V).max(1) / 127
+    inicio = np.searchsorted(np.searchsorted(slugs, yt[orden]), np.arange(len(slugs) + 1))
+    with open(salida / "trozos.bin", "wb") as f:
+        f.write(inicio.astype("<u4").tobytes())
+        f.write(escala.astype("<f4").tobytes())
+        f.write(np.round(V / escala[:, None]).astype(np.int8).tobytes())
 
     fotos = RAIZ / "frontend" / "fotos"
     shutil.rmtree(fotos, ignore_errors=True)

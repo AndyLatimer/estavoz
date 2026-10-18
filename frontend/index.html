@@ -206,7 +206,8 @@
 <script src="lib/ort.wasm.min.js"></script>
 <script>
 const SR = 16000, SEGUNDOS = 10, FPS = 25;
-const TROZO = 6 * SR, TROZO_MIN = 2 * SR, MAX_CONSULTA = 20 * SR;  // igual que backend/voz.py
+// la grabación da una sola huella de 10 s: acierta más que trocearla en 6 + 4 s (experimentar.py largos)
+const TROZO = SEGUNDOS * SR, TROZO_MIN = 2 * SR, MAX_CONSULTA = 20 * SR;
 const $ = id => document.getElementById(id);
 const btn = $('btn'), estado = $('estado'), res = $('resultados'), sala = $('sala'), aro = $('aro'), tc = $('tc');
 const ARO = 2 * Math.PI * 117;
@@ -226,7 +227,7 @@ const codigo = seg => {
   return `00:00:${d(Math.floor(f / FPS))}:${d(f % FPS)}`;
 };
 
-let sesion, ldaMu, ldaW, centroides, actores, dim;
+let sesion, ldaMu, ldaW, centroides, trozos, actores, dim;
 
 // Descarga con barra de progreso (el modelo pesa ~52 MB la primera vez)
 async function descargar(url, alAvanzar) {
@@ -246,16 +247,23 @@ async function descargar(url, alAvanzar) {
 async function cargar() {
   const barra = $('carga').firstElementChild;
   try {
-    const [modelo, lda, cent, meta] = await Promise.all([
+    const [modelo, lda, cent, troz, meta] = await Promise.all([
       descargar('modelo/voxblink-int8.onnx', p => { barra.style.width = `${p * 100}%`; estado.textContent = `Preparando la sala… ${Math.round(p * 100)}%`; }),
       fetch('datos/lda.bin').then(r => r.arrayBuffer()),
       fetch('datos/centroides.bin').then(r => r.arrayBuffer()),
+      fetch('datos/trozos.bin').then(r => r.arrayBuffer()),
       fetch('datos/actores.json').then(r => r.json()),
     ]);
     sesion = await ort.InferenceSession.create(modelo);
     dim = meta.dim; actores = meta.actores;
     ldaMu = new Float32Array(lda, 0, dim); ldaW = new Float32Array(lda, dim * 4);
     centroides = new Float32Array(cent);
+    // todas las huellas de cada actor (exportar_web.py): inicio por actor, escala y valores en int8
+    const nA = actores.length + 1, inicio = new Uint32Array(troz, 0, nA);
+    const n = inicio[nA - 1], escala = new Float32Array(troz, nA * 4, n), q8 = new Int8Array(troz, (nA + n) * 4);
+    const v = new Float32Array(n * dim);
+    for (let i = 0; i < n; i++) for (let k = 0, o = i * dim; k < dim; k++) v[o + k] = q8[o + k] * escala[i];
+    trozos = { inicio, v };
     $('carga').remove();
     estado.textContent = 'Sala lista. Cuando quieras.';
     btn.disabled = false;
@@ -311,15 +319,19 @@ function proyectar(q) {
   return p.map(v => v / n);
 }
 
-// Parecido medio de los trozos de la grabación con la huella media de cada actor
-// (solo con los candidatos, si se ha dicho qué se está viendo)
+// Parecido de la grabación con cada actor: media entre el parecido con su huella media y con
+// sus 3 trozos más parecidos (solo con los candidatos, si se ha dicho qué se está viendo)
 function puntuar(consulta, top = 3, candidatos = null) {
   const qs = consulta.map(proyectar);
   const indices = candidatos ? [...candidatos] : actores.map((_, i) => i);
+  const parecido = (vs, o) => { let s = 0; for (const q of qs) for (let k = 0; k < dim; k++) s += q[k] * vs[o + k]; return s / qs.length; };
   const lista = indices.map(i => {
-    let s = 0;
-    for (const q of qs) for (let k = 0, o = i * dim; k < dim; k++) s += q[k] * centroides[o + k];
-    return { ...actores[i], parecido: s / qs.length };
+    const media = parecido(centroides, i * dim);
+    const p = [];
+    for (let t = trozos.inicio[i]; t < trozos.inicio[i + 1]; t++) p.push(parecido(trozos.v, t * dim));
+    p.sort((a, b) => b - a);
+    const mejores = p.length ? p.slice(0, 3).reduce((a, b) => a + b) / Math.min(3, p.length) : media;
+    return { ...actores[i], parecido: (media + mejores) / 2 };
   });
   return lista.sort((x, y) => y.parecido - x.parecido).slice(0, top);
 }
@@ -472,13 +484,6 @@ btn.onclick = async () => {
     if (p < 1 && vivo) requestAnimationFrame(avanza);
   })();
 
-  // a los 6 s se calcula la primera huella mientras se graban los últimos segundos
-  let primera = null;
-  setTimeout(async () => {
-    const a = await remuestrear(juntar(), tasa);
-    primera = huellaTrozo(a.slice(0, TROZO));
-  }, TROZO / SR * 1000 + 250);
-
   setTimeout(async () => {
     vivo = false;
     captura.disconnect(); fuente.disconnect();
@@ -486,13 +491,7 @@ btn.onclick = async () => {
     document.documentElement.style.setProperty('--nivel', 0);
     const a = await remuestrear(juntar(), tasa);
     ctx.close();
-    const huellas = (async () => {
-      const out = [await (primera || huellaTrozo(a.slice(0, TROZO)))];
-      const resto = a.slice(TROZO, SEGUNDOS * SR);
-      if (resto.length >= TROZO_MIN) out.push(await huellaTrozo(resto));
-      return out;
-    })();
-    identificar(null, huellas);
+    identificar(null, huellasDe(a));
   }, SEGUNDOS * 1000);
 };
 
