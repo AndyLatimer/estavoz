@@ -34,6 +34,7 @@ def main():
     p.add_argument("--nuevos", action="store_true")
     p.add_argument("--aumentar", action="store_true")
     p.add_argument("--cache", help="carpeta donde guardar las huellas de cada actor (para poder reanudar)")
+    p.add_argument("--parte", help="k/n: uno de cada n actores; auto: reparto dinámico entre procesos")
     args = p.parse_args()
     separar = args.separar
     hechos = set()
@@ -43,8 +44,22 @@ def main():
         hechos = set(previo["clips"])
     vectores, etiquetas, clips_id, fichas = [], [], [], {}
     rng = np.random.default_rng(1)
-    for carpeta in sorted(p for p in ACTORES.iterdir() if p.is_dir()):
+    k, n_partes = map(int, args.parte.split("/")) if args.parte and args.parte != "auto" else (0, 1)
+    for num, carpeta in enumerate(sorted(p for p in ACTORES.iterdir() if p.is_dir())):
         ficha_path = carpeta / "ficha.json"
+        if args.parte == "auto":   # reparto dinámico: cada proceso reserva el siguiente actor libre
+            guardado = Path(args.cache) / f"{carpeta.name}.npz"
+            reserva = guardado.with_suffix(".reservado")
+            if guardado.exists():
+                pass
+            else:
+                try:
+                    reserva.parent.mkdir(parents=True, exist_ok=True)
+                    reserva.open("x").close()
+                except FileExistsError:
+                    continue
+        elif num % n_partes != k:
+            continue
         if not ficha_path.exists():
             continue
         clips = [c for c in sorted((carpeta / "clips").glob("*")) if c.suffix.lower() in EXT_AUDIO]
@@ -83,12 +98,15 @@ def main():
             v = vectores[n_vect_inicio:]
             v = np.concatenate(v) if v else np.zeros((0, 1), np.float32)
             np.savez(guardado, vectores=v, etiquetas=np.array(etiquetas[inicio:]), clips=np.array(clips_id[inicio:]))
+            guardado.with_suffix(".reservado").unlink(missing_ok=True)
         print(f"{carpeta.name}: {len(clips)} clips, {n} trozos")
 
     if hechos:  # añadir a lo que ya había
         vectores.insert(0, previo["vectores"])
         etiquetas = list(previo["etiquetas"]) + etiquetas
         clips_id = list(previo["clips"]) + clips_id
+    if args.parte:   # cada parte solo rellena la caché; el índice se monta con una pasada sin --parte
+        return
     if not vectores:
         sys.exit("No hay clips que indexar en data/actores/")
     np.savez(SALIDA, vectores=np.concatenate(vectores), etiquetas=np.array(etiquetas),

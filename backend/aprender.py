@@ -25,7 +25,7 @@ def main():
     filas, desde = [], 0
     while True:
         r = requests.get(f"{url}/rest/v1/respuestas", headers={**cab, "Range": f"{desde}-{desde + 999}"},
-                         params={"select": "id,creado,propuesto,acierto,real,huellas", "order": "id"}, timeout=60)
+                         params={"select": "id,creado,propuesto,acierto,real,huellas,version", "order": "id"}, timeout=60)
         r.raise_for_status()
         lote = r.json()
         filas += lote

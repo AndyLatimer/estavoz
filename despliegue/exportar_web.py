@@ -86,6 +86,11 @@ def entradas_busqueda(slugs):
     return salida
 
 
+# versión del modelo de voz que usa la web; las respuestas guardan la suya y solo se aprovechan
+# las del modelo en uso (1 = ECAPA, 2 = VoxBlink2 ResNet34, 3 = VoxBlink2 ResNet100)
+VERSION_MODELO = "3"
+
+
 def respuestas_validas(mu, W, C, slugs):
     """Huellas de las respuestas de los usuarios que se pueden usar para aprender.
 
@@ -100,6 +105,8 @@ def respuestas_validas(mu, W, C, slugs):
     pos = {s: i for i, s in enumerate(slugs)}
     X, y = [], []
     for r in json.loads(f.read_text(encoding="utf-8")):
+        if str(r.get("version")) != VERSION_MODELO:
+            continue
         actor = r["propuesto"] if r["acierto"] else r.get("real")
         if actor not in pos:
             continue

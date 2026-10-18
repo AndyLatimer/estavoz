@@ -76,7 +76,10 @@ ONNX = os.environ.get("ESTAVOZ_ONNX")
 @lru_cache(maxsize=1)
 def sesion_onnx():
     import onnxruntime as ort
-    return ort.InferenceSession(ONNX)
+    opciones = ort.SessionOptions()
+    if os.environ.get("ESTAVOZ_HILOS"):   # para repartir los núcleos entre varios procesos
+        opciones.intra_op_num_threads = int(os.environ["ESTAVOZ_HILOS"])
+    return ort.InferenceSession(ONNX, opciones)
 
 
 @torch.no_grad()

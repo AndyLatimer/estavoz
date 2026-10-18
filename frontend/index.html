@@ -228,7 +228,7 @@ const codigo = seg => {
 
 let sesion, ldaMu, ldaW, centroides, actores, dim;
 
-// Descarga con barra de progreso (el modelo pesa ~27 MB la primera vez)
+// Descarga con barra de progreso (el modelo pesa ~52 MB la primera vez)
 async function descargar(url, alAvanzar) {
   const r = await fetch(url);
   const total = +r.headers.get('content-length') || 0;
@@ -560,7 +560,7 @@ async function responder(acierto, real = null) {
       method: 'POST',
       headers: { apikey: CONFIG.supabaseKey, Authorization: `Bearer ${CONFIG.supabaseKey}`,
                  'Content-Type': 'application/json', Prefer: 'return=minimal' },
-      body: JSON.stringify({ propuesto: ultimo.id, acierto, real, huellas, version: '2' }),  // 2 = VoxBlink2 (256 números)
+      body: JSON.stringify({ propuesto: ultimo.id, acierto, real, huellas, version: '3' }),  // 3 = VoxBlink2 ResNet100 (exportar_web.VERSION_MODELO)
     });
   } catch (e) { console.error(e); }
 }
