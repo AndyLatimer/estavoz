@@ -536,7 +536,7 @@ function pintar(lista) {
         ${foto(top)}
         <div>
           <div class="nombre">${esc(top.nombre)}</div>
-          ${top.num_trabajos ? `<div class="dato">${top.num_trabajos >= 50 ? 'MÁS DE 50' : top.num_trabajos} DOBLAJES</div>` : ''}
+          ${top.num_trabajos ? `<div class="dato">${top.num_trabajos.toLocaleString('es-ES')} DOBLAJES</div>` : ''}
         </div>
       </div>
       <div class="medidor">

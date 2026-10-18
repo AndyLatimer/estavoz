@@ -122,7 +122,8 @@ def main():
             "nombre": fichas[s]["nombre"],
             "foto": f"fotos/{i}.jpg" if foto.exists() else "",
             "trabajos": fichas[s].get("trabajos", []),
-            "num_trabajos": fichas[s].get("num_trabajos", 0),
+            "num_trabajos": len(json.loads(t.read_text(encoding="utf-8"))) if (t := RAIZ / "data" / "actores" / s / "trabajos.json").exists()
+                            else fichas[s].get("num_trabajos", 0),
         })
     busqueda = indice_busqueda(slugs, fichas)
     (salida / "busqueda.json").write_text(json.dumps(busqueda, separators=(",", ":")), encoding="utf-8")
