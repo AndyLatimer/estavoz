@@ -5,6 +5,8 @@ Pasos (se pueden repetir; lo ya descargado no se vuelve a pedir):
   .venv/bin/python scraper/eldoblaje.py fichas [--max N]   # fichas + clips de voz de cada actor
   .venv/bin/python scraper/eldoblaje.py fotos              # fotos de los actores ya descargados
   .venv/bin/python scraper/eldoblaje.py trabajos           # lista completa de doblajes de cada actor con voz
+  .venv/bin/python scraper/eldoblaje.py contar             # cuántos doblajes tiene cada actor SIN voz (para
+                                                           # buscar su voz en otra parte, scraper/voces.py)
 
 Resultado en data/actores/<id>-<nombre>/ (ficha.json y clips/), listo para backend/indexar.py.
 Va despacio a propósito (PAUSA_SEG entre peticiones) para no cargar su servidor.
@@ -118,13 +120,14 @@ def muestras_de(sopa: BeautifulSoup) -> list[dict]:
     return [{"ruta": ruta, "titulo": titulo} for ruta, titulo in muestras.items()]
 
 
-def ficha(id_: str, nombre_lista: str) -> str:
-    """Descarga un actor. Devuelve 'ok', 'sin_audio' o 'error'."""
+def ficha(id_: str, nombre_lista: str, sin_audio: bool = False) -> str:
+    """Descarga un actor. Devuelve 'ok', 'sin_audio' o 'error'.
+    Con sin_audio=True guarda la ficha aunque no tenga muestras (su voz sale de scraper/voces.py)."""
     sopa = html(f"{BASE}FichaActorDoblaje.asp?id={id_}")
     if sopa is None:
         return "error"
     muestras = muestras_de(sopa)
-    if not muestras:
+    if not muestras and not sin_audio:
         return "sin_audio"
 
     nombre = nombre_de(sopa, nombre_lista)
@@ -228,6 +231,33 @@ def trabajos_actor(n: int, carpeta: Path, total_actores: int):
     print(f"[{n}/{total_actores}] {carpeta.name}: {len(todos)} trabajos en {total} páginas", flush=True)
 
 
+def contar():
+    """De los actores sin muestra de voz: nombre, número aproximado de doblajes y si tiene foto."""
+    from concurrent.futures import ThreadPoolExecutor
+    actores = json.loads(LISTA.read_text(encoding="utf-8"))
+    hechos = json.loads((RAIZ / "data" / "eldoblaje_hechos.json").read_text())
+    destino = RAIZ / "data" / "eldoblaje_sin_audio.json"
+    hecho = json.loads(destino.read_text(encoding="utf-8")) if destino.exists() else {}
+    pendientes = [i for i, v in hechos.items() if v == "sin_audio" and i not in hecho]
+
+    def uno(id_):
+        sopa = html(f"{BASE}FichaActorDoblaje.asp?id={id_}")
+        if sopa is None:
+            return id_, None
+        filas = len(trabajos_de(sopa))
+        paginas = max([int(m) for m in re.findall(rf"FichaActorDoblaje\.asp\?id={id_}&(?:amp;)?pag=(\d+)", str(sopa))], default=1)
+        foto = sopa.find("img", src=f"FotosActores/{id_}.jpg") is not None
+        return id_, {"nombre": nombre_de(sopa, actores.get(id_, "")), "paginas": paginas, "filas": filas, "foto": foto}
+
+    with ThreadPoolExecutor(2) as ex:
+        for n, (id_, datos) in enumerate(ex.map(uno, pendientes), 1):
+            if datos:
+                hecho[id_] = datos
+            if n % 50 == 0 or n == len(pendientes):
+                destino.write_text(json.dumps(hecho, ensure_ascii=False), encoding="utf-8")
+                print(f"[{n}/{len(pendientes)}]", flush=True)
+
+
 def fichas(maximo: int | None):
     if not LISTA.exists():
         sys.exit("Primero: scraper/eldoblaje.py listar")
@@ -248,7 +278,7 @@ def fichas(maximo: int | None):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("paso", choices=["listar", "fichas", "fotos", "trabajos"])
+    p.add_argument("paso", choices=["listar", "fichas", "fotos", "trabajos", "contar"])
     p.add_argument("--max", type=int, help="procesar como mucho N actores (para probar)")
     a = p.parse_args()
-    {"listar": listar, "fotos": fotos, "trabajos": trabajos}.get(a.paso, lambda: fichas(a.max))()
+    {"listar": listar, "fotos": fotos, "trabajos": trabajos, "contar": contar}.get(a.paso, lambda: fichas(a.max))()

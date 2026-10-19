@@ -25,7 +25,7 @@ import numpy as np
 
 RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ / "backend"))
-from lda import centroides, entrenar_lda, proyectar  # noqa: E402
+from lda import entrenar_lda, proyectar  # noqa: E402
 
 
 def titulo_base(t: str) -> str:
@@ -129,12 +129,15 @@ def centroides_mezcla(Xp, y, clips, slugs, peso_entrevistas=0.5):
     hablando en una entrevista no suena igual que doblando, y si cuenta como el resto acaba mandando
     (tiene muchos más trozos). Así sube el acierto de esos dobladores del 74,6 al 78,5 %."""
     entrevista = np.array(["/voz_" in c for c in clips])
-    C = centroides(Xp[~entrevista], y[~entrevista], slugs)
+    C = np.zeros((len(slugs), Xp.shape[1]))
     for i, a in enumerate(slugs):
-        m = entrevista & (y == a)
-        if m.any():
+        propia, m = ~entrevista & (y == a), entrevista & (y == a)
+        if propia.any():
+            v = Xp[propia].mean(0)
+            C[i] = v / np.linalg.norm(v)
+        if m.any():   # los que solo tienen voz de entrevistas (sin muestra en eldoblaje) se quedan con esa
             v = Xp[m].mean(0)
-            C[i] = C[i] + peso_entrevistas * v / np.linalg.norm(v)
+            C[i] += (peso_entrevistas if propia.any() else 1.0) * v / np.linalg.norm(v)
     return C / np.linalg.norm(C, axis=1, keepdims=True)
 
 

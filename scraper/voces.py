@@ -179,8 +179,8 @@ def segundos_nuevos(slug: str) -> float:
     return sum(sf.info(str(f)).duration for f in (ACTORES / slug / "clips").glob("voz_*.flac"))
 
 
-def procesar_episodio(rec, slug, ep, nombres_planos, ficha_nombres):
-    import soundfile as sf
+def bajar_trozos(ep):
+    """Primeros minutos de un episodio en trozos de 6 s, sin silencios. Devuelve (clave, trozos) o un error."""
     from voz import SAMPLE_RATE, cargar_audio
     clave = hashlib.sha1(ep["mp3"].encode()).hexdigest()[:12]
     tmp = DIR / "tmp" / f"{clave}.mp3"
@@ -197,7 +197,7 @@ def procesar_episodio(rec, slug, ep, nombres_planos, ficha_nombres):
                         break
         audio = cargar_audio(tmp, max_seg=MINUTOS * 60)
     except Exception as e:
-        return {"error": str(e)[:200]}
+        return clave, str(e)[:200]
     finally:
         tmp.unlink(missing_ok=True)
     paso = 6 * SAMPLE_RATE
@@ -205,9 +205,18 @@ def procesar_episodio(rec, slug, ep, nombres_planos, ficha_nombres):
     # fuera silencios y casi silencios
     energia = np.array([np.sqrt(np.mean(t ** 2)) for t in trozos]) if trozos else np.zeros(0)
     validos = np.flatnonzero(energia > max(1e-3, 0.25 * np.median(energia))) if len(energia) else []
-    if len(validos) < 5:
+    return clave, [trozos[i] for i in validos]
+
+
+def procesar_episodio(rec, slug, ep, nombres_planos, ficha_nombres):
+    import soundfile as sf
+    from voz import SAMPLE_RATE
+    clave, trozos = bajar_trozos(ep)
+    if isinstance(trozos, str):
+        return {"error": trozos}
+    if len(trozos) < 5:
         return {"voces": [], "nota": "corto"}
-    h = np.stack([rec.huella_ecapa(trozos[i]) for i in validos])
+    h = np.stack([rec.huella_ecapa(t) for t in trozos])
     grupos = voces(h)[:3]
     texto = plano(ep["titulo"]) + " " + ep.get("texto", "")
     resultado, elegidas = [], {}
@@ -215,7 +224,7 @@ def procesar_episodio(rec, slug, ep, nombres_planos, ficha_nombres):
         c = h[g].mean(0)
         c /= np.linalg.norm(c)
         centrales = g[np.argsort(-(h[g] @ c))[:2]]   # 12 s, como una consulta de la web
-        punt = rec.puntuar(np.stack([rec.huella_r100(trozos[validos[i]]) for i in centrales]))
+        punt = rec.puntuar(np.stack([rec.huella_r100(trozos[i]) for i in centrales]))
         mejor = int(np.argmax(punt))
         puesto = int((punt > punt[rec.ids.index(slug)]).sum()) + 1 if slug in rec.ids else 9999
         info = {"segundos": int(len(g) * 6), "mejor": rec.ids[mejor], "parecido": round(float(punt[mejor]), 3),
@@ -234,7 +243,7 @@ def procesar_episodio(rec, slug, ep, nombres_planos, ficha_nombres):
             elegidas[quien] = (orden, g, c, info)
     for quien, (_, g, c, info) in elegidas.items():
         suyos = g[(h[g] @ c) >= 0.55]
-        voz = np.concatenate([trozos[validos[i]] for i in suyos])[: SEG_POR_EPISODIO * SAMPLE_RATE]
+        voz = np.concatenate([trozos[i] for i in suyos])[: SEG_POR_EPISODIO * SAMPLE_RATE]
         destino = ACTORES / quien / "clips" / f"voz_{clave}.flac"
         if not destino.exists():
             sf.write(destino, voz, SAMPLE_RATE)
@@ -272,6 +281,153 @@ def procesar(hilos: int):
         reserva.unlink(missing_ok=True)
         guardados = [v["guardado"] for v in r.get("voces", []) if "guardado" in v]
         print(f"{slug} #{k}: {', '.join(guardados) or r.get('nota') or r.get('error', '')[:60] or 'nada'}", flush=True)
+
+
+# --- Dobladores sin ninguna muestra en eldoblaje ----------------------------------------------------
+# De ~9.600 dobladores sin muestra no hay voz con la que comparar, así que se busca una voz que se
+# repita en entrevistas de programas distintos (el presentador cambia, el invitado no). Se confirma con
+# la ResNet100 (parecido proyectado >= 0,45: dos entrevistas de la misma persona dan de mediana 0,52 y
+# de personas distintas casi nunca pasan de 0,39) y se descarta si esa voz ya es de un doblador conocido
+# (presentadores que también doblan).
+NUEVOS = DIR / "nuevos.json"
+NUEVOS_HECHOS = DIR / "nuevos_hechos"
+# sin muestra con la que comparar, el contexto importa más: "voz" a secas sale en cualquier sitio
+# (economistas, físicos y psiquiatras con el mismo nombre que un doblador se colaban)
+DOBLAJE_ESTRICTO = re.compile(r"\b(doblaje|doblajes|doblador|dobladora|dobladores|dobladoras|doblatge|"
+                              r"actor de voz|actriz de voz|actor de doblaje|actriz de doblaje)\b")
+
+
+def doblajes_aprox(d: dict) -> int:
+    return d["paginas"] * 50 if d["paginas"] > 1 else d["filas"]
+
+
+def buscar_nuevos(maximo: int, minimo_doblajes: int):
+    sin = json.loads((RAIZ / "data" / "eldoblaje_sin_audio.json").read_text(encoding="utf-8"))
+    hechos = json.loads(NUEVOS.read_text(encoding="utf-8")) if NUEVOS.exists() else {}
+    orden = sorted(sin.items(), key=lambda x: -doblajes_aprox(x[1]))
+    orden = [(i, d) for i, d in orden if doblajes_aprox(d) >= minimo_doblajes][:maximo]
+    for id_, d in orden:
+        if id_ in hechos:
+            continue
+        nom = plano(d["nombre"])
+        if len(nom.split()) < 2:
+            hechos[id_] = {"nombre": d["nombre"], "eps": []}
+            continue
+        resultados = itunes(d["nombre"])
+        # con nombres corrientes ("Daniel García") los homónimos tapan las entrevistas de doblaje
+        if resultados is not None and not any(contiene(plano(e.get("trackName")), nom) and DOBLAJE_ESTRICTO.search(
+                plano(f"{e.get('trackName')} {e.get('description')} {e.get('collectionName')}")) for e in resultados):
+            time.sleep(6)
+            mas = itunes(f"{d['nombre']} doblaje")
+            resultados = None if mas is None else resultados + mas
+        if resultados is None:
+            print(f"{d['nombre']}: el directorio no contesta, se reintentará", flush=True)
+            continue
+        eps, programas = [], set()
+        for e in sorted(resultados, key=lambda e: -bool(DOBLAJE_ESTRICTO.search(plano(
+                f"{e.get('trackName')} {e.get('description')} {e.get('collectionName')}")))):
+            minutos = (e.get("trackTimeMillis") or 0) / 60000
+            # su nombre en el título (es el invitado), un programa distinto cada vez
+            if not e.get("episodeUrl") or minutos < 8 or not contiene(plano(e.get("trackName")), nom) \
+                    or e.get("collectionId") in programas:
+                continue
+            programas.add(e.get("collectionId"))
+            texto = plano(f"{e.get('trackName')} {e.get('description')} {e.get('collectionName')}")
+            eps.append({"titulo": e.get("trackName", ""), "programa": e.get("collectionName", ""), "mp3": e["episodeUrl"],
+                        "doblaje": bool(DOBLAJE_ESTRICTO.search(texto))})
+            if len(eps) == 4:
+                break
+        hechos[id_] = {"nombre": d["nombre"], "doblajes": doblajes_aprox(d), "eps": eps}
+        print(f"{d['nombre']} ({doblajes_aprox(d)} doblajes): {len(eps)} programas", flush=True)
+        NUEVOS.write_text(json.dumps(hechos, ensure_ascii=False), encoding="utf-8")
+        time.sleep(6)
+
+
+def procesar_nuevo(rec, id_, cand):
+    import soundfile as sf
+    import eldoblaje
+    from voz import SAMPLE_RATE
+    if not any(ep.get("doblaje") for ep in cand["eps"]):
+        return {"nota": "ningún episodio habla de doblaje"}
+    episodios, de_doblaje = [], []   # (clave, trozos, huellas ECAPA, grupos); si el episodio habla de doblaje
+    for ep in cand["eps"]:
+        clave, trozos = bajar_trozos(ep)
+        if isinstance(trozos, str) or len(trozos) < 5:
+            continue
+        h = np.stack([rec.huella_ecapa(t) for t in trozos])
+        episodios.append((clave, trozos, h, voces(h)[:4]))
+        de_doblaje.append(ep.get("doblaje", False))
+    if len(episodios) < 2:
+        return {"nota": "menos de 2 episodios útiles"}
+    centro = lambda v: v / np.linalg.norm(v)
+    # la pareja de voces (de episodios distintos) que más se parecen
+    mejor = None
+    for a in range(len(episodios)):
+        for b in range(a + 1, len(episodios)):
+            if not (de_doblaje[a] or de_doblaje[b]):   # un homónimo entrevistado dos veces no cuenta
+                continue
+            for ga in episodios[a][3]:
+                for gb in episodios[b][3]:
+                    s = float(centro(episodios[a][2][ga].mean(0)) @ centro(episodios[b][2][gb].mean(0)))
+                    if s > 0.97:   # el mismo audio publicado en dos programas: no es una voz que se repita
+                        continue
+                    if mejor is None or s > mejor[0]:
+                        mejor = (s, a, ga, b, gb)
+    if mejor is None or mejor[0] < 0.5:
+        return {"nota": "ninguna voz se repite", "parecido_ecapa": round(mejor[0], 3) if mejor else None}
+    s_ecapa, a, ga, b, gb = mejor
+
+    def r100(e, g):
+        _, trozos, h, _ = episodios[e]
+        c = centro(h[g].mean(0))
+        return np.stack([rec.huella_r100(trozos[i]) for i in g[np.argsort(-(h[g] @ c))[:2]]])
+    ha, hb = r100(a, ga), r100(b, gb)
+    pa = centro(np.mean([centro(v) for v in (ha - rec.mu) @ rec.W], 0))
+    pb = centro(np.mean([centro(v) for v in (hb - rec.mu) @ rec.W], 0))
+    s_r100 = float(pa @ pb)
+    punt = rec.puntuar(np.concatenate([ha, hb]))
+    conocido = rec.ids[int(np.argmax(punt))]
+    info = {"parecido_ecapa": round(s_ecapa, 3), "parecido_r100": round(s_r100, 3),
+            "conocido_mas_parecido": conocido, "parecido_conocido": round(float(punt.max()), 3)}
+    if s_r100 < 0.45:
+        return {**info, "nota": "no se confirma"}
+    if punt.max() >= 0.45:
+        return {**info, "nota": "es la voz de un doblador que ya conocemos"}
+    # ficha de eldoblaje (nombre, foto, trabajos) aunque no tenga muestras
+    if eldoblaje.ficha(id_, cand["nombre"], sin_audio=True) != "ok":
+        return {**info, "nota": "no se pudo bajar su ficha"}
+    carpeta = next(ACTORES.glob(f"{id_}-*"))
+    c = centro(episodios[a][2][ga].mean(0) + episodios[b][2][gb].mean(0))
+    guardados = []
+    for clave, trozos, h, _ in episodios:
+        suyos = np.flatnonzero(h @ c >= 0.55)
+        if len(suyos) >= 5:
+            voz = np.concatenate([trozos[i] for i in suyos])[: SEG_POR_EPISODIO * SAMPLE_RATE]
+            sf.write(carpeta / "clips" / f"voz_{clave}.flac", voz, SAMPLE_RATE)
+            guardados.append(f"voz_{clave}.flac ({len(voz) // SAMPLE_RATE} s)")
+    return {**info, "actor": carpeta.name, "guardados": guardados}
+
+
+def procesar_nuevos(hilos: int):
+    rec = Reconocedor(hilos)
+    candidatos = json.loads(NUEVOS.read_text(encoding="utf-8"))
+    NUEVOS_HECHOS.mkdir(parents=True, exist_ok=True)
+    orden = sorted(((i, c) for i, c in candidatos.items() if len(c["eps"]) >= 2), key=lambda x: -x[1].get("doblajes", 0))
+    for id_, cand in orden:
+        hecho = NUEVOS_HECHOS / f"{id_}.json"
+        reserva = hecho.with_suffix(".reservado")
+        if hecho.exists():
+            continue
+        try:
+            reserva.open("x").close()
+        except FileExistsError:
+            continue
+        t0 = time.time()
+        r = procesar_nuevo(rec, id_, cand)
+        r["tiempo"] = round(time.time() - t0)
+        hecho.write_text(json.dumps(r, ensure_ascii=False), encoding="utf-8")
+        reserva.unlink(missing_ok=True)
+        print(f"{cand['nombre']}: {r.get('actor', '')} {r.get('guardados', '')} {r.get('nota', '')}", flush=True)
 
 
 def indexar(hilos: int):
@@ -316,14 +472,24 @@ def juntar():
             if len(h[tipo]):
                 nX.append(h[tipo]); ny += [slug] * len(h[tipo]); nc += [f"{slug}/{nombre}.flac{sufijo}"] * len(h[tipo])
     np.savez(salida, vectores=np.concatenate(nX), etiquetas=np.array(ny), clips=np.array(nc), separado=d["separado"])
+    # dobladores que solo tienen voz de entrevistas (procesar_nuevos): su ficha entra en fichas.json
+    fs = fichas()
+    altas = [x for x in sorted(set(ny)) if x not in fs]
+    for slug in altas:
+        fs[slug] = json.loads((ACTORES / slug / "ficha.json").read_text(encoding="utf-8"))
+    if altas:
+        (RAIZ / "data" / "fichas.json").write_text(json.dumps(fs, ensure_ascii=False, indent=1), encoding="utf-8")
+        print(f"{len(altas)} dobladores nuevos: {', '.join(fs[x]['nombre'] for x in altas)}")
     nuevos = sum("/voz_" in x and "#" not in x for x in nc)
     print(f"Índice: {len(ny)} trozos, {nuevos} limpios de voz nueva, de {len({s for s, x in zip(ny, nc) if '/voz_' in x})} dobladores")
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("paso", choices=["buscar", "procesar", "indexar", "juntar"])
+    p.add_argument("paso", choices=["buscar", "procesar", "indexar", "juntar", "buscar_nuevos", "procesar_nuevos"])
     p.add_argument("--hilos", type=int, default=1)
+    p.add_argument("--max", type=int, default=300, help="buscar_nuevos: cuántos dobladores sin muestra mirar")
+    p.add_argument("--minimo", type=int, default=100, help="buscar_nuevos: doblajes mínimos")
     a = p.parse_args()
     if a.paso == "buscar":
         buscar()
@@ -331,5 +497,9 @@ if __name__ == "__main__":
         procesar(a.hilos)
     elif a.paso == "indexar":
         indexar(a.hilos)
+    elif a.paso == "buscar_nuevos":
+        buscar_nuevos(a.max, a.minimo)
+    elif a.paso == "procesar_nuevos":
+        procesar_nuevos(a.hilos)
     else:
         juntar()
