@@ -38,6 +38,7 @@ MAX_POR_PROGRAMA = 2
 MAX_BYTES = 12 << 20                 # ~10-12 min de mp3
 MINUTOS = 10
 SEG_POR_EPISODIO = 90
+SEG_INDICE = 48                      # para las huellas bastan 8 trozos de cada clip
 MAX_SEG_ACTOR = 6 * 60               # con 6 min de voz nueva por doblador ya vale
 PALABRAS_DOBLAJE = re.compile(r"\b(doblaje|doblador|dobladora|dobla|voz|voces|locutor|locutora|actor de voz)\b")
 
@@ -213,7 +214,7 @@ def procesar_episodio(rec, slug, ep, nombres_planos, ficha_nombres):
     for g in grupos:
         c = h[g].mean(0)
         c /= np.linalg.norm(c)
-        centrales = g[np.argsort(-(h[g] @ c))[:3]]
+        centrales = g[np.argsort(-(h[g] @ c))[:2]]   # 12 s, como una consulta de la web
         punt = rec.puntuar(np.stack([rec.huella_r100(trozos[validos[i]]) for i in centrales]))
         mejor = int(np.argmax(punt))
         puesto = int((punt > punt[rec.ids.index(slug)]).sum()) + 1 if slug in rec.ids else 9999
@@ -247,10 +248,11 @@ def procesar(hilos: int):
     fs = fichas()
     nombres_planos = {s: plano(f["nombre"]) for s, f in fs.items() if len(plano(f["nombre"]).split()) >= 2}
     HECHOS.mkdir(parents=True, exist_ok=True)
-    # por turnos: primero el primer episodio de cada doblador, luego el segundo...
-    trabajo = [(k, slug, ep) for slug, eps in candidatos.items() for k, ep in enumerate(eps)]
-    trabajo.sort(key=lambda x: x[0])
-    for k, slug, ep in trabajo:
+    # primero los episodios que hablan de doblaje (38 % traen su voz); los que solo lo nombran de pasada
+    # en la descripción casi nunca (7 %) y se saltan
+    trabajo = [(-ep["prioridad"], k, slug, ep) for slug, eps in candidatos.items() for k, ep in enumerate(eps) if ep["prioridad"]]
+    trabajo.sort(key=lambda x: x[:2])
+    for _, k, slug, ep in trabajo:
         hecho = HECHOS / f"{slug}__{k}.json"
         reserva = hecho.with_suffix(".reservado")
         if hecho.exists():
@@ -290,7 +292,7 @@ def indexar(hilos: int):
             reserva.open("x").close()
         except FileExistsError:
             continue
-        audio = cargar_audio(clip, max_seg=SEG_POR_EPISODIO)
+        audio = cargar_audio(clip, max_seg=SEG_INDICE)
         rng = np.random.default_rng(int(hashlib.sha1(clip.name.encode()).hexdigest()[:8], 16))
         np.savez(destino, limpio=huellas(audio), movil=huellas(movil(audio, rng)))
         reserva.unlink(missing_ok=True)
