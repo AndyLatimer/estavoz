@@ -472,34 +472,55 @@ def nombres_eldoblaje() -> dict:
     return out
 
 
-def buscar_programas():
+def ids_conocidos() -> dict:
+    """id de eldoblaje -> carpeta, de los dobladores que ya están en el índice."""
+    return {str(json.loads((ACTORES / s / "ficha.json").read_text(encoding="utf-8"))["id_eldoblaje"]): s for s in fichas()}
+
+
+def buscar_programas(minimo_episodios: int = 4):
+    """Episodios cuyo título nombra a un solo doblador (conocido o con 50+ doblajes), en los programas de
+    FEEDS y en los de programas/feeds.json (búsqueda de podcasts de cine, anime, videojuegos...).
+    De los programas que no son de doblaje solo se quedan los que tienen varios episodios así."""
     import xml.etree.ElementTree as ET
     nombres = nombres_eldoblaje()
+    sin_audio = json.loads((RAIZ / "data" / "eldoblaje_sin_audio.json").read_text(encoding="utf-8"))
+    conocidos = ids_conocidos()
+    validos = {i for i in nombres if i in conocidos or doblajes_aprox(sin_audio.get(i, {"paginas": 1, "filas": 0})) >= 50}
     por_nombre = {}
-    for i, n in nombres.items():
-        por_nombre.setdefault(n, []).append(i)
+    for i in validos:
+        por_nombre.setdefault(nombres[i], []).append(i)
+    extra = PROGRAMAS / "feeds.json"
+    feeds = {**(json.loads(extra.read_text(encoding="utf-8")) if extra.exists() else {}), **FEEDS}
     episodios = []
-    for prog, url in FEEDS.items():
-        raiz = ET.fromstring(sesion.get(url, timeout=60).content)
+    for prog, url in feeds.items():
+        try:
+            raiz = ET.fromstring(sesion.get(url, timeout=60).content)
+        except Exception as e:
+            print(f"  ! {prog}: {str(e)[:80]}")
+            continue
+        del_programa = []
         for it in raiz.iter("item"):
             enc = it.find("enclosure")
-            if enc is None:
+            if enc is None or not enc.get("url"):
                 continue
             t = f" {plano(it.findtext('title'))} "
             ids = sorted({i for n, l in por_nombre.items() if f" {n} " in t for i in l})
             if len(ids) == 1:   # un solo invitado con nombre de doblador
-                episodios.append({"programa": prog, "titulo": it.findtext("title"), "mp3": enc.get("url"), "id": ids[0]})
+                del_programa.append({"programa": prog, "titulo": it.findtext("title"), "mp3": enc.get("url"), "id": ids[0]})
+        if prog in FEEDS or len({e["id"] for e in del_programa}) >= minimo_episodios:
+            episodios += del_programa
+            print(f"{prog}: {len(del_programa)} episodios", flush=True)
     PROGRAMAS.mkdir(parents=True, exist_ok=True)
     (PROGRAMAS / "episodios.json").write_text(json.dumps(episodios, ensure_ascii=False), encoding="utf-8")
     print(f"{len(episodios)} episodios con un doblador en el título")
 
 
-def analizar_programas(hilos: int, max_conocidos: int = 15):
+def analizar_programas(hilos: int, max_conocidos: int = 40):
     """Voces de cada episodio: duración, huella ECAPA y huella proyectada de la ResNet100 (y su audio)."""
     import soundfile as sf
     from voz import SAMPLE_RATE
     rec = Reconocedor(hilos)
-    conocidos = {str(json.loads((ACTORES / s / "ficha.json").read_text(encoding="utf-8"))["id_eldoblaje"]): s for s in fichas()}
+    conocidos = ids_conocidos()
     episodios = json.loads((PROGRAMAS / "episodios.json").read_text(encoding="utf-8"))
     # todos los de dobladores sin muestra y, por programa, unos cuantos de conocidos para comprobar
     vistos, elegidos = {}, []
@@ -538,11 +559,18 @@ def analizar_programas(hilos: int, max_conocidos: int = 15):
 
 def elegir_invitados(aplicar: bool = False):
     """Quita en cada programa la voz que se repite (presentador) y se queda con la principal que queda.
-    Con los invitados conocidos mide si acierta; con aplicar=True guarda la voz de los nuevos."""
+
+    Con los invitados conocidos se comprueba cada programa: solo es de fiar si en la mayoría se eligió la
+    voz más parecida a su muestra (en programas que no son de doblaje, el nombre del título puede ser de
+    un homónimo). De los programas de fiar se guarda la voz de los invitados nuevos y, de los conocidos,
+    la que se confirma (su doblador entre los 5 más parecidos). Con aplicar=False solo lo cuenta."""
     import shutil
     import eldoblaje
     rec = Reconocedor()
-    conocidos = {str(json.loads((ACTORES / s / "ficha.json").read_text(encoding="utf-8"))["id_eldoblaje"]): s for s in fichas()}
+    conocidos = ids_conocidos()
+    # los que solo tienen voz de estos mismos programas no sirven para comprobar
+    solo_programas = {i for i, s in conocidos.items()
+                      if not [c for c in (ACTORES / s / "clips").iterdir() if not c.name.startswith("voz_")]}
     lista = json.loads((RAIZ / "data" / "eldoblaje_lista.json").read_text(encoding="utf-8"))
     sin_audio = json.loads((RAIZ / "data" / "eldoblaje_sin_audio.json").read_text(encoding="utf-8"))
     episodios = json.loads((PROGRAMAS / "episodios.json").read_text(encoding="utf-8"))
@@ -554,10 +582,10 @@ def elegir_invitados(aplicar: bool = False):
         f = PROGRAMAS / f"{clave}.npz"
         if f.exists():
             d = np.load(f)
-            voces_ep = [{"k": k, "ecapa": d[f"ecapa{k}"], "r100": d[f"r100_{k}"], "p": proy(d[f"r100_{k}"]), "seg": int(d[f"seg{k}"])}
+            voces_ep = [{"k": k, "r100": d[f"r100_{k}"], "p": proy(d[f"r100_{k}"]), "seg": int(d[f"seg{k}"])}
                         for k in range(int(d["n"]))]
             analizados.append((ep, clave, voces_ep))
-    bien = mal = 0
+    decisiones, prueba = [], {}   # prueba[programa] = [bien, mal]
     for ep, clave, vs in analizados:
         otros = [vs2 for e2, c2, vs2 in analizados if e2["programa"] == ep["programa"] and c2 != clave]
         for v in vs:   # presentador, sintonía...: está en 3 o más episodios más del programa
@@ -568,26 +596,40 @@ def elegir_invitados(aplicar: bool = False):
         inv = max(candidatas, key=lambda v: v["seg"])
         punt = rec.puntuar(inv["r100"])
         if ep["id"] in conocidos:
-            puesto = int((punt > punt[rec.ids.index(conocidos[ep["id"]])]).sum()) + 1
-            # ¿alguna otra voz del episodio se parecía más a su muestra? entonces se eligió mal
             i = rec.ids.index(conocidos[ep["id"]])
-            puestos_otras = [int((p > p[i]).sum()) + 1 for p in (rec.puntuar(v["r100"]) for v in vs if v is not inv)]
-            mejor_otra = min(puestos_otras, default=9999)
-            bien += puesto <= mejor_otra
-            mal += puesto > mejor_otra
+            puesto = int((punt > punt[i]).sum()) + 1
+            if ep["id"] not in solo_programas:
+                # ¿alguna otra voz del episodio se parecía más a su muestra? entonces se eligió mal
+                otras = [int((q > q[i]).sum()) + 1 for q in (rec.puntuar(v["r100"]) for v in vs if v is not inv)]
+                r = prueba.setdefault(ep["programa"], [0, 0])
+                r[0 if puesto <= min(otras, default=9999) else 1] += 1
+            if puesto <= 5:
+                decisiones.append((ep, clave, inv, conocidos[ep["id"]]))
             continue
-        # nuevo: que no sea la voz de un doblador conocido
-        if punt.max() >= 0.45:
-            print(f"  descartado {lista[ep['id']]}: se parece a {rec.ids[int(np.argmax(punt))]} ({punt.max():.2f})")
+        if punt.max() >= 0.45:   # nuevo: que no sea la voz de un doblador conocido
             continue
-        # solo dobladores de verdad: actores, youtubers o directores invitados tienen pocos doblajes
-        if doblajes_aprox(sin_audio.get(ep["id"], {"paginas": 1, "filas": 0})) < 50:
+        if doblajes_aprox(sin_audio.get(ep["id"], {"paginas": 1, "filas": 0})) < 50:   # actores, youtubers...
             continue
-        print(f"  {lista[ep['id']]} ({ep['programa']}): voz de {inv['seg']} s, en {inv['repite']} episodios más")
-        if aplicar and eldoblaje.ficha(ep["id"], lista[ep["id"]], sin_audio=True) == "ok":
-            carpeta = next(ACTORES.glob(f"{ep['id']}-*"))
-            shutil.copy(PROGRAMAS / f"{clave}_{inv['k']}.flac", carpeta / "clips" / f"voz_{clave}.flac")
-    print(f"Invitados conocidos: en {bien} se eligió la voz más parecida a su muestra y en {mal} otra")
+        decisiones.append((ep, clave, inv, None))
+    fiables = {prog for prog, (b, m) in prueba.items() if b >= 2 and b >= 0.7 * (b + m)}
+    for prog, (b, m) in sorted(prueba.items(), key=lambda x: -sum(x[1])):
+        print(f"{prog}: bien {b}, mal {m} -> {'de fiar' if prog in fiables else 'no'}")
+    nuevos = extra = 0
+    for ep, clave, inv, carpeta in decisiones:
+        if ep["programa"] not in fiables:
+            continue
+        if carpeta is None:
+            nuevos += 1
+            print(f"  nuevo: {lista[ep['id']]} ({ep['programa']}), {inv['seg']} s")
+            if not aplicar or eldoblaje.ficha(ep["id"], lista[ep["id"]], sin_audio=True) != "ok":
+                continue
+            carpeta = next(ACTORES.glob(f"{ep['id']}-*")).name
+        else:
+            extra += 1
+        destino = ACTORES / carpeta / "clips" / f"voz_{clave}.flac"
+        if aplicar and not destino.exists():
+            shutil.copy(PROGRAMAS / f"{clave}_{inv['k']}.flac", destino)
+    print(f"{nuevos} dobladores nuevos y {extra} voces más de dobladores conocidos")
 
 
 def indexar(hilos: int):
