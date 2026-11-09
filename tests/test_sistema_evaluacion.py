@@ -128,3 +128,50 @@ def test_evaluacion_completa_informes_y_regresiones(tmp_path: Path):
     h2 = guardar_en_historial(informe_peor, ruta_hist, tolerancia_caida_pct=0.5)
     assert h2["comparativa_con_anterior"]["hay_regresion"] is True
     assert any("Top-1" in r for r in h2["comparativa_con_anterior"]["regresiones_detectadas"])
+
+
+def test_filtrar_trozos_intrusos_y_blindaje_respuestas(tmp_path: Path):
+    """Verifica la poda de trozos intrusos (`auditar_indice.py`) y el blindaje anti-envenenamiento en `exportar_web.py`."""
+    from auditar_indice import filtrar_trozos_intrusos
+    from lda import normaliza
+
+    sys.path.insert(0, str(RAIZ / "despliegue"))
+    from exportar_web import centroides_mezcla, respuestas_validas
+
+    dim = 16
+    v_a = normaliza(np.eye(1, dim, 0, dtype=np.float32))[0]
+    v_b = normaliza(np.eye(1, dim, 1, dtype=np.float32))[0]
+    # 5 trozos legítimos de actor-a y 1 trozo intruso (idéntico a actor-b, ortogonal a actor-a)
+    Xp = np.vstack([v_a, v_a, v_a, v_a, v_a, v_b, v_b, v_b, v_b, v_b])
+    y = np.array(["actor-a"] * 6 + ["actor-b"] * 4)
+    C = np.vstack([v_a, v_b])
+    conservar, intrusos = filtrar_trozos_intrusos(Xp, y, C, ["actor-a", "actor-b"], umbral_outlier=0.15, min_trozos_por_actor=4)
+    assert len(intrusos) == 1
+    assert intrusos[0]["actor_asignado"] == "actor-a"
+    assert intrusos[0]["actor_mas_parecido"] == "actor-b"
+    assert bool(conservar[5]) is False
+
+    # Blindaje de respuestas_validas contra NaN, duplicados, vectores nulos y baja similitud
+    mu = np.zeros(dim, dtype=np.float32)
+    W = np.eye(dim, dtype=np.float32)
+    ruta_resp = tmp_path / "respuestas.json"
+    respuestas_mock = [
+        {"version": "3", "propuesto": "actor-a", "acierto": True, "huellas": [v_a.tolist()]},
+        {"version": "3", "propuesto": "actor-a", "acierto": True, "huellas": [v_a.tolist()]},  # duplicada exacta
+        {"version": "3", "propuesto": "actor-a", "acierto": True, "huellas": [[0.0] * dim]},   # vector nulo
+        {"version": "3", "propuesto": "actor-a", "acierto": True, "huellas": [[float("nan")] * dim]},  # NaN
+        {"version": "3", "propuesto": "actor-a", "acierto": True, "huellas": [v_b.tolist()]},  # impostor (sim 0)
+    ]
+    ruta_resp.write_text(json.dumps(respuestas_mock), encoding="utf-8")
+    Xr, yr = respuestas_validas(mu, W, C, ["actor-a", "actor-b"], ruta_respuestas=ruta_resp)
+    assert len(Xr) == 1 and yr == ["actor-a"]
+
+    # centroides_mezcla pondera respuestas a 0.35 sin desplazar el estudio
+    C_mix = centroides_mezcla(
+        np.vstack([v_a, v_b]),
+        np.array(["actor-a", "actor-a"]),
+        np.array(["actor-a/Muestras.mp3", "respuesta"]),
+        ["actor-a"],
+        peso_respuestas=0.35,
+    )
+    assert float(C_mix[0] @ v_a) > float(C_mix[0] @ v_b)

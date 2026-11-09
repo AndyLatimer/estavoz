@@ -132,6 +132,18 @@ El desglose por actor de `real_independiente` (`268` actores con 2+ clips indepe
    - `114-eduardo-gutierrez` (`144` trozos en `trozos.bin`, `12x` la mediana): Top-1 en `15/449` (`3,3 %`) y Top-3 en `29/449` (`6,5 %`).
    - `121759-carla-mercader` (`104` trozos): Top-1 en `11/449` (`2,4 %`) y Top-3 en `20/449` (`4,5 %`).
    - `140429-santi-goas` (`62` trozos): Top-1 en `9/449` (`2,0 %`).
+4. **Detección y poda automática de «trozos intrusos» (`backend/auditar_indice.py`):**
+   - Al ejecutar `python backend/auditar_indice.py` sobre los `22.946` trozos publicados, se detectaron **319 trozos (`1,39 %`) con similitud `< 0,10`** (y **525 trozos con `< 0,15`**) respecto al centroide de su propio actor, correspondiendo a fragmentos de 6 s donde habla otro personaje de la escena (a menudo incluso de distinto sexo):
+     - En `120-miguel-angel-jenner`: los trozos `#2214` (`sim = -0.0401`) y `#2206` (`sim = -0.0281`) coinciden con las actrices `1353-lola-oria` (`0.4090`) y `1325-joel-mulachs` (`0.3878`).
+     - En `30136-oscar-castellanos`: los trozos `#12244` (`sim = -0.0281`) y `#12250` (`sim = -0.0196`) coinciden con `232-victoria-angulo` (`0.4098`) y `75801-angela-soler` (`0.4081`).
+     - En `234-mar-bordallo`: el trozo `#10019` (`sim = -0.0501`) coincide con `150-federico-menescal` (`0.3754`).
+   - Al activar [`filtrar_trozos_intrusos`](file:///x:/projects/estavoz/backend/auditar_indice.py#L26-L69) con `umbral_outlier = 0.15` (integrado en `despliegue/exportar_web.py`), el Top-1 en galería independiente sube de **`81,79 %` a `82,00 %` (`+0,21` ptos)** y con `0.20` a **`82,04 %` (`+0,25` ptos)**, subiendo el Top-3 a **`89,56 %`**.
+5. **Parejas de «gemelos vocales» en el espacio LDA (`auditar_indice.py`):**
+   - `55138-luis-miguel-cajal` $\leftrightarrow$ `72118-rodri-martin` (`sim = 0.7108`)
+   - `1973-victor-ramirez` $\leftrightarrow$ `29333-manuel-guitian` (`sim = 0.6873`)
+   - `176278-pedro-dargel` $\leftrightarrow$ `55138-luis-miguel-cajal` (`sim = 0.6792`)
+   - `240-matilde-conesa` $\leftrightarrow$ `3980-mayte-torres` (`sim = 0.6691`)
+   - `15092-idilio-cardoso` $\leftrightarrow$ `659-jose-maria-alarcon` (`sim = 0.6334`)
 
 ---
 

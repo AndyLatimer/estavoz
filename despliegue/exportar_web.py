@@ -14,6 +14,7 @@ La web no enlaza ni carga nada de fuera.
 Si existe data/respuestas.json (backend/aprender.py), añade las respuestas "¿Acertamos?" que pasen los filtros.
 El índice tiene que estar hecho con ESTAVOZ_ONNX=frontend/modelo/voxblink-int8.onnx (VoxBlink2 ResNet100, v3).
 """
+import hashlib
 import json
 import re
 import shutil
@@ -25,6 +26,7 @@ import numpy as np
 
 RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ / "backend"))
+from auditar_indice import filtrar_trozos_intrusos  # noqa: E402
 from lda import entrenar_lda, proyectar  # noqa: E402
 from metadatos_modelo import (  # noqa: E402
     VERSION_LDA_ACTUAL,
@@ -102,50 +104,69 @@ def entradas_busqueda(slugs):
 VERSION_MODELO = "3"
 
 
-def respuestas_validas(mu, W, C, slugs):
+def respuestas_validas(mu, W, C, slugs, ruta_respuestas=None):
     """Huellas de las respuestas de los usuarios que se pueden usar para aprender.
 
-    Filtros contra respuestas falsas o despistes:
-      - solo respuestas con un actor ("No lo sé" no enseña nada);
-      - la voz tiene que parecerse algo a ese actor (parecido >= 0.2 y entre sus 10 más parecidos);
+    Filtros contra respuestas falsas, despistes o envenenamiento:
+      - solo respuestas con un actor válido y de la versión actual del modelo;
+      - vectores finitos con norma no degenerada y sin duplicados exactos;
+      - la voz tiene que superar el umbral dudoso calibrado (>= 0.252) y estar en el Top-5 del actor;
       - cada actor recibe como mucho tantas huellas de usuarios como trozos propios tiene.
     """
-    f = RAIZ / "data" / "respuestas.json"
+    f = Path(ruta_respuestas) if ruta_respuestas is not None else (RAIZ / "data" / "respuestas.json")
     if not f.exists():
         return [], []
     pos = {s: i for i, s in enumerate(slugs)}
+    umbral_min = max(0.25, float(UMBRALES_VOXBLINK_R100_CALIBRADOS.umbral_dudoso))
+    hashes_vistos: set[str] = set()
     X, y = [], []
     for r in json.loads(f.read_text(encoding="utf-8")):
         if str(r.get("version")) != VERSION_MODELO:
             continue
-        actor = r["propuesto"] if r["acierto"] else r.get("real")
+        actor = r.get("propuesto") if r.get("acierto") else r.get("real")
         if actor not in pos:
             continue
-        h = np.asarray(r["huellas"], dtype=np.float32)
-        if h.ndim != 2 or h.shape[1] != C.shape[1]:
+        h = np.asarray(r.get("huellas", []), dtype=np.float32)
+        if h.ndim != 2 or len(h) == 0 or h.shape[1] != C.shape[1] or not np.all(np.isfinite(h)):
             continue
-        h = h / np.linalg.norm(h, axis=1, keepdims=True)
+        normas = np.linalg.norm(h, axis=1, keepdims=True)
+        if np.any(normas < 1e-5):
+            continue
+        clave_hash = hashlib.sha1(np.round(h, 4).tobytes()).hexdigest()
+        if clave_hash in hashes_vistos:
+            continue
+        h = h / normas
         punt = (proyectar(h, mu, W) @ C.T).mean(0)
-        if punt[pos[actor]] >= 0.2 and pos[actor] in np.argsort(-punt)[:10]:
+        if punt[pos[actor]] >= umbral_min and pos[actor] in np.argsort(-punt)[:5]:
+            hashes_vistos.add(clave_hash)
             X.append(h)
             y += [actor] * len(h)
     return X, y
 
 
-def centroides_mezcla(Xp, y, clips, slugs, peso_entrevistas=0.5):
-    """Huella media de cada actor, con la voz de entrevistas (scraper/voces.py, clips "voz_") a medio peso:
-    hablando en una entrevista no suena igual que doblando, y si cuenta como el resto acaba mandando
-    (tiene muchos más trozos). Así sube el acierto de esos dobladores del 74,6 al 78,5 %."""
-    entrevista = np.array(["/voz_" in c for c in clips])
+def centroides_mezcla(Xp, y, clips, slugs, peso_entrevistas=0.5, peso_respuestas=0.35):
+    """Huella media de cada actor, con la voz de entrevistas (`voz_`) a medio peso (0.5)
+    y las respuestas voluntarias de usuarios (`respuesta`) a peso moderado (0.35) para no desplazar
+    las muestras verificadas de estudio."""
+    clips_str = np.asarray(clips, dtype=str)
+    entrevista = np.array(["/voz_" in c for c in clips_str], dtype=bool)
+    respuesta = clips_str == "respuesta"
     C = np.zeros((len(slugs), Xp.shape[1]))
     for i, a in enumerate(slugs):
-        propia, m = ~entrevista & (y == a), entrevista & (y == a)
+        es_actor = (y == a)
+        propia = (~entrevista) & (~respuesta) & es_actor
+        m_ent = entrevista & es_actor
+        m_resp = respuesta & es_actor
         if propia.any():
             v = Xp[propia].mean(0)
             C[i] = v / np.linalg.norm(v)
-        if m.any():   # los que solo tienen voz de entrevistas (sin muestra en eldoblaje) se quedan con esa
-            v = Xp[m].mean(0)
+        if m_ent.any():   # los que solo tienen voz de entrevistas (sin muestra en eldoblaje) se quedan con esa
+            v = Xp[m_ent].mean(0)
             C[i] += (peso_entrevistas if propia.any() else 1.0) * v / np.linalg.norm(v)
+        if m_resp.any():
+            v = Xp[m_resp].mean(0)
+            tiene_base = propia.any() or m_ent.any()
+            C[i] += (peso_respuestas if tiene_base else 1.0) * v / np.linalg.norm(v)
     return C / np.linalg.norm(C, axis=1, keepdims=True)
 
 
@@ -164,7 +185,7 @@ def main():
     sel = np.isin(y, [a for a in slugs if n_clips[a] >= 2])
     mu, W = entrenar_lda(X[sel], y[sel])
     C = centroides_mezcla(proyectar(X, mu, W), y, clips, slugs)
-    Xt, yt = X, y
+    Xt, yt, clips_t = X, y, np.asarray(clips, dtype=str)
 
     # lo que han enseñado los usuarios entra en la huella media de cada actor
     Xr, yr = respuestas_validas(mu, W, C, slugs)
@@ -176,9 +197,18 @@ def main():
             vistos[a] = vistos.get(a, 0) + 1
             tope[i] = vistos[a] <= propios[a]
         Xr, yr = Xr[tope], yr[tope]
-        Xt, yt = np.concatenate([X, Xr]), np.concatenate([y, yr])
-        C = centroides_mezcla(proyectar(Xt, mu, W), yt, np.concatenate([clips, ["respuesta"] * len(yr)]), slugs)
+        Xt = np.concatenate([X, Xr])
+        yt = np.concatenate([y, yr])
+        clips_t = np.concatenate([clips_t, ["respuesta"] * len(yr)])
+        C = centroides_mezcla(proyectar(Xt, mu, W), yt, clips_t, slugs)
         print(f"Respuestas de usuarios usadas: {len(yr)} huellas de {len(set(yr))} actores")
+
+    # Poda automática de trozos intrusos (interlocutores secundarios o música pura con sim < 0.15)
+    conservar, intrusos = filtrar_trozos_intrusos(proyectar(Xt, mu, W), yt, C, slugs, umbral_outlier=0.15)
+    if intrusos:
+        Xt, yt, clips_t = Xt[conservar], yt[conservar], clips_t[conservar]
+        C = centroides_mezcla(proyectar(Xt, mu, W), yt, clips_t, slugs)
+        print(f"Trozos intrusos filtrados: {len(intrusos)} segmentos con sim < 0.15 al centroide del actor")
 
     salida = RAIZ / "frontend" / "datos"
     shutil.rmtree(salida, ignore_errors=True)

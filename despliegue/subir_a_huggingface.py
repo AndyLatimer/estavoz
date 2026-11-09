@@ -15,6 +15,9 @@ from pathlib import Path
 from huggingface_hub import HfApi
 
 RAIZ = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(RAIZ / "backend"))
+from metadatos_modelo import validar_artefactos_web  # noqa: E402
+
 WEB = RAIZ / "frontend"
 CABECERA = """---
 title: Estavoz
@@ -33,9 +36,10 @@ def main():
     if len(sys.argv) != 2 or "HF_TOKEN" not in os.environ:
         sys.exit(__doc__)
     repo = sys.argv[1]
-    for f in ("modelo/voxblink-int8.onnx", "datos/lda.bin", "datos/centroides.bin", "datos/actores.json"):
+    for f in ("modelo/voxblink-int8.onnx", "datos/lda.bin", "datos/centroides.bin", "datos/trozos.bin", "datos/actores.json"):
         if not (WEB / f).exists():
             sys.exit(f"Falta frontend/{f}")
+    validar_artefactos_web(WEB / "datos", ruta_onnx=WEB / "modelo" / "voxblink-int8.onnx")
 
     api = HfApi(token=os.environ["HF_TOKEN"])
     api.create_repo(repo, repo_type="space", space_sdk="static", exist_ok=True)
