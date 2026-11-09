@@ -72,10 +72,18 @@ def cargar_audio(ruta: str | Path, separar: bool = False, max_seg: int | None = 
     return solo_voz(audio) if separar else audio
 
 
-def trozos(audio: np.ndarray) -> list[np.ndarray]:
+def trozos(audio: np.ndarray, filtrar_silencio: bool = False) -> list[np.ndarray]:
     paso = TROZO_SEG * SAMPLE_RATE
     partes = [audio[i:i + paso] for i in range(0, len(audio), paso)]
-    return [p for p in partes if len(p) >= TROZO_MIN_SEG * SAMPLE_RATE]
+    candidatos = [p for p in partes if len(p) >= TROZO_MIN_SEG * SAMPLE_RATE]
+    if filtrar_silencio or os.environ.get("ESTAVOZ_VAD") == "1":
+        try:
+            from aumento_acustico import DetectorVoz
+            det = DetectorVoz(sr=SAMPLE_RATE, min_voz_util_seg=float(TROZO_MIN_SEG))
+            candidatos = [p for p in candidatos if det.analizar(p).es_toma_valida]
+        except Exception:
+            pass
+    return candidatos
 
 
 # Con ESTAVOZ_ONNX=ruta.onnx se usa el mismo modelo que corre en el navegador,

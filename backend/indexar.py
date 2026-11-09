@@ -34,6 +34,8 @@ def main():
     p.add_argument("--separar", action="store_true")
     p.add_argument("--nuevos", action="store_true")
     p.add_argument("--aumentar", action="store_true")
+    p.add_argument("--vad", action="store_true", help="filtra trozos con silencio o música dominante usando VAD acústico")
+    p.add_argument("--sala", action="store_true", help="añade variantes con simulación de acústica de salón TV (RIR)")
     p.add_argument("--cache", help="carpeta donde guardar las huellas de cada actor (para poder reanudar)")
     p.add_argument("--parte", help="k/n: uno de cada n actores; auto: reparto dinámico entre procesos")
     args = p.parse_args()
@@ -89,11 +91,20 @@ def main():
             etiquetas += [carpeta.name] * len(h)
             clips_id += [f"{carpeta.name}/{clip.name}"] * len(h)
             n += len(h)
+            if args.vad:
+                import os
+                os.environ["ESTAVOZ_VAD"] = "1"
             if args.aumentar:
                 hm = huellas(movil(audio, rng))
                 vectores.append(hm)
                 etiquetas += [carpeta.name] * len(hm)
                 clips_id += [f"{carpeta.name}/{clip.name}#movil"] * len(hm)
+            if args.sala:
+                from aumento_acustico import simular_sala_tv
+                hs = huellas(simular_sala_tv(audio, semilla=int(rng.integers(0, 1000000))))
+                vectores.append(hs)
+                etiquetas += [carpeta.name] * len(hs)
+                clips_id += [f"{carpeta.name}/{clip.name}#sala"] * len(hs)
         if n:
             fichas[carpeta.name] = json.loads(ficha_path.read_text(encoding="utf-8"))
         if guardado:

@@ -35,7 +35,7 @@ import numpy as np
 RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from lda import entrenar_lda, normaliza, proyectar  # noqa: E402
+from lda import entrenar_lda, estimar_covarianza_canal, normaliza, proyectar  # noqa: E402
 from metadatos_modelo import InfoModelo, extraer_info_indice  # noqa: E402
 from rechazo import (  # noqa: E402
     CalibradorConfianza,
@@ -215,6 +215,8 @@ class ConfigEvaluacion:
     peso_entrevistas: float = 0.5
     peso_centroide: float = 0.5
     cuantizar_trozos_int8: bool = True
+    usar_cov_acustica: bool = False
+    peso_cov_acustica: float = 0.10
     # Si es True, al evaluar un clip de eldoblaje excluye también de la galería del actor los clips
     # extraídos de podcasts/entrevistas/voces cuya selección dependió del índice previo.
     solo_galeria_independiente: bool = False
@@ -366,7 +368,25 @@ def ejecutar_evaluacion_completa(
                 actores_entreno = {a for a in actores_galeria if pliegue_actor[a] != p}
             X_lda = np.concatenate([r.vectores for r in refs_galeria if r.actor in actores_entreno])
             y_lda = np.concatenate([[r.actor] * len(r.vectores) for r in refs_galeria if r.actor in actores_entreno])
-            modelos_lda[p] = entrenar_lda(X_lda, y_lda, dims=cfg.dims_lda, reg=cfg.reg_lda)
+            cov_ac = None
+            if cfg.usar_cov_acustica:
+                pares_limp, pares_mov = [], []
+                mapa_refs = {(r.actor, r.clip_id): r.vectores for r in refs_galeria if r.actor in actores_entreno}
+                for r in refs_galeria:
+                    if r.actor in actores_entreno and r.clip_id.endswith("#movil"):
+                        base_id = r.clip_id[:-6]
+                        if (r.actor, base_id) in mapa_refs:
+                            vb = mapa_refs[(r.actor, base_id)]
+                            vm = r.vectores
+                            L = min(len(vb), len(vm))
+                            if L > 0:
+                                pares_limp.append(vb[:L])
+                                pares_mov.append(vm[:L])
+                if pares_limp:
+                    cov_ac = estimar_covarianza_canal(np.vstack(pares_limp), np.vstack(pares_mov))
+            modelos_lda[p] = entrenar_lda(
+                X_lda, y_lda, dims=cfg.dims_lda, reg=cfg.reg_lda, cov_acustica=cov_ac, peso_cov_acustica=cfg.peso_cov_acustica
+            )
     else:
         mu_id = np.zeros(dim_vec, dtype=np.float32)
         W_id = np.eye(dim_vec, dtype=np.float32)
@@ -1065,6 +1085,7 @@ def main() -> None:
     p.add_argument("--grabaciones-reales", type=Path, help="Manifiesto JSON de grabaciones reales con permiso verificado")
     p.add_argument("--sintetico", action="store_true", help="Ejecutar verificación con datos sintéticos controlados")
     p.add_argument("--solo-galeria-independiente", action="store_true")
+    p.add_argument("--usar-cov-acustica", action="store_true", help="Inyecta covarianza de canal acústico en Sw de LDA")
     p.add_argument("--salida", type=Path, default=RAIZ / "data" / "evaluaciones" / "ultima")
     p.add_argument("--historial", type=Path, default=RAIZ / "data" / "evaluaciones" / "historial.jsonl")
     args = p.parse_args()
@@ -1094,6 +1115,7 @@ def main() -> None:
         nombre_experimento=nombre_exp,
         entrenar_lda_en_pliegues=entrenar_lda,
         solo_galeria_independiente=args.solo_galeria_independiente,
+        usar_cov_acustica=args.usar_cov_acustica,
     )
     informe = ejecutar_evaluacion_completa(refs, cons, config=cfg, repartos_contexto=repartos)
     rutas = exportar_informe_json_csv(informe, args.salida)
