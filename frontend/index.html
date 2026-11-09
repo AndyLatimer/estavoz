@@ -233,7 +233,11 @@ const codigo = seg => {
   return `00:00:${d(Math.floor(f / FPS))}:${d(f % FPS)}`;
 };
 
-let sesion, ldaMu, ldaW, centroides, trozos, actores, dim;
+let sesion, ldaMu, ldaW, centroides, trozos, actores, dim, umbrales;
+const UMBRALES_DEFECTO = {
+  umbral_fiable: 0.3663, umbral_dudoso: 0.252, margen_fiable: 0.1115, margen_dudoso: 0.0502,
+  z_fiable: 5.3001, descuento_contexto_max: 0.035, umbral_1a1_fiable: 0.337, umbral_1a1_dudoso: 0.2319
+};
 
 // Descarga con barra de progreso (el modelo pesa ~52 MB la primera vez)
 async function descargar(url, alAvanzar) {
@@ -261,7 +265,7 @@ async function cargar() {
       fetch('datos/actores.json').then(r => r.json()),
     ]);
     sesion = await ort.InferenceSession.create(modelo);
-    dim = meta.dim; actores = meta.actores;
+    dim = meta.dim; actores = meta.actores; umbrales = { ...UMBRALES_DEFECTO, ...(meta.umbrales_rechazo || {}) };
     ldaMu = new Float32Array(lda, 0, dim); ldaW = new Float32Array(lda, dim * 4);
     centroides = new Float32Array(cent);
     // todas las huellas de cada actor (exportar_web.py): inicio por actor, escala y valores en int8
@@ -331,15 +335,51 @@ function puntuar(consulta, top = 3, candidatos = null) {
   const qs = consulta.map(proyectar);
   const indices = candidatos ? [...candidatos] : actores.map((_, i) => i);
   const parecido = (vs, o) => { let s = 0; for (const q of qs) for (let k = 0; k < dim; k++) s += q[k] * vs[o + k]; return s / qs.length; };
+  const beta = (umbrales && umbrales.beta_exceso_trozos) || 0;
   const lista = indices.map(i => {
     const media = parecido(centroides, i * dim);
     const p = [];
     for (let t = trozos.inicio[i]; t < trozos.inicio[i + 1]; t++) p.push(parecido(trozos.v, t * dim));
     p.sort((a, b) => b - a);
     const mejores = p.length ? p.slice(0, 3).reduce((a, b) => a + b) / Math.min(3, p.length) : media;
-    return { ...actores[i], parecido: (media + mejores) / 2 };
+    const penal = beta > 0 ? beta * Math.max(0, Math.log(Math.max(p.length, 1) / 12)) : 0;
+    return { ...actores[i], parecido: (media + mejores - penal) / 2 };
   });
-  return lista.sort((x, y) => y.parecido - x.parecido).slice(0, top);
+  lista.sort((x, y) => y.parecido - x.parecido);
+  const seleccion = lista.slice(0, top);
+  seleccion.estado = clasificarConsulta(lista, Boolean(candidatos));
+  return seleccion;
+}
+
+// Clasificación en 3 estados (backend/rechazo.py): 'identificado', 'dudoso' o 'desconocido'
+function clasificarConsulta(ordenada, conContexto = false) {
+  if (!ordenada.length) return 'desconocido';
+  const u = umbrales || UMBRALES_DEFECTO;
+  const s1 = ordenada[0].parecido;
+  if (ordenada.length === 1) {
+    return s1 >= u.umbral_1a1_fiable ? 'identificado' : (s1 >= u.umbral_1a1_dudoso ? 'dudoso' : 'desconocido');
+  }
+  const s2 = ordenada[1].parecido, margen12 = s1 - s2;
+  let zCohorte = (s1 - s2) / 0.05;
+  if (ordenada.length >= 4) {
+    const resto = ordenada.slice(1).map(x => x.parecido);
+    const mu = resto.reduce((a, b) => a + b, 0) / resto.length;
+    const sd = Math.sqrt(resto.reduce((a, x) => a + (x - mu) * (x - mu), 0) / resto.length);
+    zCohorte = (s1 - mu) / Math.max(sd, 1e-4);
+  }
+  let desc = 0;
+  if (conContexto && actores.length > 1 && ordenada.length < actores.length) {
+    const ratio = Math.log(Math.max(ordenada.length, 2)) / Math.log(actores.length);
+    desc = u.descuento_contexto_max * (1 - Math.min(Math.max(ratio, 0), 1));
+  }
+  const uFiable = u.umbral_fiable - desc, uDudoso = u.umbral_dudoso - 0.5 * desc;
+  const mFiable = u.margen_fiable * (conContexto ? 0.85 : 1), mDudoso = u.margen_dudoso * (conContexto ? 0.8 : 1);
+  const zMin = u.z_fiable * (conContexto ? 0.75 : 1);
+  if (s1 >= uFiable && (margen12 >= mFiable || (s1 >= uFiable + 0.045 && margen12 >= mDudoso)) && (ordenada.length < 4 || zCohorte >= zMin)) {
+    return 'identificado';
+  }
+  if (s1 >= uDudoso && (margen12 >= mDudoso || s1 >= uFiable)) return 'dudoso';
+  return 'desconocido';
 }
 
 // "¿Qué estás viendo?": obras, personajes y actores originales con su reparto (despliegue/exportar_web.py)
@@ -520,10 +560,18 @@ $('fichero').onchange = e => {
   e.target.value = '';
 };
 
-// El parecido del modelo (coseno) no es un porcentaje; esto lo traduce a algo legible.
-// Calibrado con 2.051 pruebas sobre clips de doblaje: con el mejor >= 0.325 (50 %) acierta
-// ~9 de cada 10 veces, con >= 0.35 el 95 % y con >= 0.5 (100 %) prácticamente siempre.
+// El parecido del modelo (coseno) no es un porcentaje; esto lo traduce a una probabilidad calibrada.
+// Curva por tramos calibrada sobre 3.373 consultas reales de VoxBlink2 ResNet100 (backend/rechazo.py, ECE = 0.0103).
+const CURVA_PORCENTAJE = [[0.15, 0], [0.22, 19], [0.28, 28], [0.33, 33], [0.37, 47], [0.42, 64], [0.48, 86], [0.54, 95], [0.60, 100]];
 const aPorcentaje = s => Math.round(Math.max(0, Math.min(1, (s - 0.15) / 0.35)) * 100);
+function aPorcentajeCalibrado(s) {
+  if (s <= CURVA_PORCENTAJE[0][0]) return 0;
+  for (let i = 1; i < CURVA_PORCENTAJE.length; i++) {
+    const [x0, y0] = CURVA_PORCENTAJE[i - 1], [x1, y1] = CURVA_PORCENTAJE[i];
+    if (s <= x1) return Math.round(y0 + ((s - x0) / (x1 - x0)) * (y1 - y0));
+  }
+  return 100;
+}
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 function foto(a, peq = false) {
@@ -585,16 +633,22 @@ async function responder(acierto, real = null) {
 
 function pintar(lista) {
   const [top, ...otros] = lista;
-  const pct = aPorcentaje(top.parecido);
+  const estadoId = lista.estado || (aPorcentajeCalibrado(top.parecido) >= 50 ? 'identificado' : 'dudoso');
+  const pct = aPorcentajeCalibrado(top.parecido);
   ultimo = top;
-  estado.textContent = pct >= 50 ? '¡Corten! La tenemos.' : 'Toma dudosa… ¿será alguno de estos?';
+  estado.textContent = estadoId === 'identificado'
+    ? '¡Corten! La tenemos.'
+    : (estadoId === 'dudoso' ? 'Toma dudosa… ¿será alguno de estos?' : 'No logro identificar esta voz con seguridad.');
+  const rotuloFicha = estadoId === 'identificado'
+    ? 'ESTA VOZ ES DE'
+    : (estadoId === 'dudoso' ? 'TOMA DUDOSA · ¿QUIZÁ ES DE…?' : 'VOZ NO IDENTIFICADA · MÁS CERCANA A');
   const encendidos = Math.round(pct / 5);
   let papeles = (top.trabajos || []).slice(0, 4).map(papel);
   if (top.papelPista) papeles = [{ ...top.papelPista, destacado: true }, ...papeles.filter(p => p.obra !== top.papelPista.obra)].slice(0, 4);
   res.dataset.otros = JSON.stringify(otros.map(o => ({ id: o.id, nombre: o.nombre })));
   res.innerHTML = `
     <article class="ficha principal">
-      <div class="rotulo"><span>TOMA ${String(toma).padStart(2, '0')}</span><span>ESTA VOZ ES DE</span></div>
+      <div class="rotulo"><span>TOMA ${String(toma).padStart(2, '0')}</span><span>${rotuloFicha}</span></div>
       ${ultimaPista ? `<div class="dato" style="margin-top:6px">ENTRE ${ultimaPista.n} ${ultimaPista.n === 1 ? 'VOZ' : 'VOCES'} DE «${esc(ultimaPista.texto.toUpperCase())}»</div>` : ''}
       <div class="quien">
         ${foto(top)}
@@ -614,7 +668,7 @@ function pintar(lista) {
             <span class="obra">${esc(p.obra)}${p.anio ? ' · ' + p.anio : ''}</span></li>`).join('')}
       </ul>` : ''}
       ${ultimaPista ? '' : `<div class="sin-pista">
-        <p>${pct >= 50 ? '¿Quieres asegurarte?' : '¿No es?'} Dime qué estás viendo y vuelvo a mirar esta misma toma.</p>
+        <p>${estadoId === 'identificado' ? '¿Quieres asegurarte?' : '¿No es?'} Dime qué estás viendo y vuelvo a mirar esta misma toma.</p>
         <button onclick="pedirPista()">Decir qué estoy viendo</button></div>`}
       <div class="acciones">
         <button class="prim" onclick="btn.click()">Otra toma</button>
@@ -623,8 +677,8 @@ function pintar(lista) {
       ${pregunta(otros)}
     </article>
     ${otros.length ? `<article class="ficha" style="animation-delay:.12s">
-      <div class="rotulo"><span>TAMBIÉN PODRÍA SER</span></div>
-      ${otros.map(o => `<div class="otro">${foto(o, true)}<span class="n">${esc(o.nombre)}</span><span class="pct">${aPorcentaje(o.parecido)}%</span></div>`).join('')}
+      <div class="rotulo"><span>${estadoId === 'desconocido' ? 'OTRAS VOCES CERCANAS (BAJA FIABILIDAD)' : 'TAMBIÉN PODRÍA SER'}</span></div>
+      ${otros.map(o => `<div class="otro">${foto(o, true)}<span class="n">${esc(o.nombre)}</span><span class="pct">${aPorcentajeCalibrado(o.parecido)}%</span></div>`).join('')}
     </article>` : ''}`;
   res.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }

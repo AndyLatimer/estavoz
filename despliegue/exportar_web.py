@@ -1,8 +1,8 @@
 """Pasa el índice (data/indice.npz + data/fichas.json) al formato que lee la web.
 
 Genera en frontend/:
-  datos/lda.bin         media (192) + matriz W (192 x 192) de la LDA, float32
-  datos/centroides.bin  huella media de cada actor ya proyectada, float32 (actores x 192)
+  datos/lda.bin         media (256) + matriz W (256 x 256) de la LDA, float32
+  datos/centroides.bin  huella media de cada actor ya proyectada, float32 (actores x 256)
   datos/trozos.bin      todas las huellas proyectadas, por actor: inicio de cada actor (uint32, actores + 1),
                         escala de cada huella (float32) y la huella en int8. La web mezcla el parecido con
                         la huella media y con los 3 trozos más parecidos de cada actor (+3 puntos de acierto)
@@ -12,7 +12,7 @@ Genera en frontend/:
   fotos/<n>.jpg
 La web no enlaza ni carga nada de fuera.
 Si existe data/respuestas.json (backend/aprender.py), añade las respuestas "¿Acertamos?" que pasen los filtros.
-El índice tiene que estar hecho con ESTAVOZ_ONNX=frontend/modelo/voxblink-int8.onnx.
+El índice tiene que estar hecho con ESTAVOZ_ONNX=frontend/modelo/voxblink-int8.onnx (VoxBlink2 ResNet100, v3).
 """
 import json
 import re
@@ -26,6 +26,14 @@ import numpy as np
 RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ / "backend"))
 from lda import entrenar_lda, proyectar  # noqa: E402
+from metadatos_modelo import (  # noqa: E402
+    VERSION_LDA_ACTUAL,
+    info_por_version,
+    inspeccionar_onnx,
+    validar_artefactos_web,
+    validar_compatibilidad_indice,
+)
+from rechazo import UMBRALES_VOXBLINK_R100_CALIBRADOS  # noqa: E402
 
 
 def titulo_base(t: str) -> str:
@@ -143,6 +151,9 @@ def centroides_mezcla(Xp, y, clips, slugs, peso_entrevistas=0.5):
 
 def main():
     datos = np.load(RAIZ / "data" / "indice.npz")
+    ruta_onnx = RAIZ / "frontend" / "modelo" / "voxblink-int8.onnx"
+    info_onnx = inspeccionar_onnx(ruta_onnx) if ruta_onnx.exists() else info_por_version(VERSION_MODELO)
+    validar_compatibilidad_indice(datos, info_modelo=info_onnx, version_esperada=VERSION_MODELO)
     X, y, clips = datos["vectores"], datos["etiquetas"], datos["clips"]
     fichas = json.loads((RAIZ / "data" / "fichas.json").read_text(encoding="utf-8"))
     slugs = sorted(fichas)
@@ -209,8 +220,17 @@ def main():
         filas = json.loads(f.read_text(encoding="utf-8")) if f.exists() else []
         (papeles / f"{i}.json").write_text(json.dumps(
             [[t["obra"], t["personaje"], t["anio"], t["actor_original"]] for t in filas], ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    web = {"dim": int(X.shape[1]), "actores": actores}
+    web = {
+        "dim": int(X.shape[1]),
+        "version_modelo": VERSION_MODELO,
+        "arquitectura_modelo": info_onnx.arquitectura,
+        "variante_modelo": info_onnx.variante,
+        "version_lda": VERSION_LDA_ACTUAL,
+        "umbrales_rechazo": UMBRALES_VOXBLINK_R100_CALIBRADOS.a_dict(),
+        "actores": actores,
+    }
     (salida / "actores.json").write_text(json.dumps(web, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    validar_artefactos_web(salida, ruta_onnx=ruta_onnx if ruta_onnx.exists() else None, version_esperada=VERSION_MODELO)
     print(f"Búsqueda: {len(entradas)} obras/personajes/actores, {(salida / 'busqueda.json').stat().st_size >> 10} KB")
     print(f"{len(slugs)} actores (LDA entrenada con {sel.sum()} trozos de "
           f"{sum(v >= 2 for v in n_clips.values())} actores) -> {salida}")

@@ -14,11 +14,10 @@ Web: https://srharrison-estavoz.static.hf.space
    cada noche esas respuestas se incorporan a las huellas de los dobladores.
 
 ### Modelo de voz
-SimAM-ResNet34 entrenado con VoxBlink2 (100.000+ voces de YouTube en muchos idiomas) y afinado con VoxCeleb2
-(`backend/voxblink.py`, pesos en Hugging Face `gaunernst/wespeaker-voxblink2-samresnet34-ft`).
-Se exporta a ONNX con el fbank de Kaldi dentro y comprimido a 8 bits (`despliegue/exportar_voxblink.py`, 27 MB).
-En la prueba con grabaciones de móvil simuladas acierta un 69,6 % a la primera (78 % entre los 3 primeros),
-frente al 55 % del modelo anterior (ECAPA).
+SimAM-ResNet100 entrenado con VoxBlink2 (100.000+ voces de YouTube en muchos idiomas) y afinado con VoxCeleb2
+(`backend/voxblink.py`, variante `r100`, pesos en Hugging Face `bzikst/voxblink2_samresnet100_ft`).
+Se exporta a ONNX con el fbank de Kaldi dentro y comprimido a 8 bits (`despliegue/exportar_voxblink.py`, ~52 MB).
+En la evaluación reproducible sobre los 836 dobladores (`backend/sistema_evaluacion.py`), con muestras móviles simuladas acierta un 81,8 % Top-1 y 89,5 % Top-3 en búsqueda abierta (76,3 % Top-1 en 6 s; 83,5 % en 12 s; 86,7 % en 18 s), y un 94,2 % Top-1 (97,9 % Top-3) al usar "¿Qué estás viendo?", rechazando además el 95,0 % de las voces desconocidas (`backend/rechazo.py`).
 
 ### Por qué acierta con el móvil
 - La LDA se entrena con cada clip en versión limpia y en versión "grabada con el móvil delante de la tele"
@@ -59,8 +58,12 @@ HF_TOKEN=... .venv/bin/python despliegue/subir_a_huggingface.py SrHarrison/estav
 
 ## Medir el acierto
 
-`backend/experimentar.py` compara variantes con la misma prueba (fragmentos de clips de eldoblaje que el
-modelo no ha visto, validación cruzada por dobladores): `lda`, `movil`, `aumentado`, `duracion`, `modelos`.
+- `backend/sistema_evaluacion.py` ejecuta la evaluación reproducible completa (global, por actor, grabación, fuente y duración; con/sin búsqueda contextual; simulación de voces desconocidas en 3 estados; informes JSON/CSV y detección de regresiones):
+  ```bash
+  .venv/bin/python backend/sistema_evaluacion.py --salida data/evaluaciones/estandar
+  .venv/bin/python backend/sistema_evaluacion.py --solo-galeria-independiente --salida data/evaluaciones/independiente
+  ```
+- `backend/experimentar.py` compara variantes con fragmentos de clips de eldoblaje: `lda`, `movil`, `aumentado`, `duracion`, `modelos`.
 
 ## Base de datos de respuestas
 

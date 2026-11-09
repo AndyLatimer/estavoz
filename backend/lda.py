@@ -9,7 +9,9 @@ from scipy.linalg import eigh
 
 
 def normaliza(x):
-    return x / np.linalg.norm(x, axis=-1, keepdims=True)
+    x64 = np.asarray(x, dtype=np.float64)
+    n = np.linalg.norm(x64, axis=-1, keepdims=True)
+    return (x64 / np.maximum(n, 1e-12)).astype(np.asarray(x).dtype if np.asarray(x).dtype == np.float32 else np.float64)
 
 
 def entrenar_lda(X, y, dims=None, reg=1e-2):

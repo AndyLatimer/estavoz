@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from voz import SAMPLE_RATE, cargar_audio, huellas  # noqa: E402
+from voz import SAMPLE_RATE, cargar_audio, huellas, info_modelo_actual  # noqa: E402
 
 RAIZ = Path(__file__).resolve().parent.parent
 CACHE = RAIZ / "data" / "cache_huellas"
@@ -25,11 +25,13 @@ CONSULTA_SEG = 8
 def huellas_clip(clip: Path) -> tuple[np.ndarray, list[np.ndarray]]:
     """Huellas del clip entero y de varias consultas de 8 s sacadas de él (con caché)."""
     import os
+    info_mod = info_modelo_actual()
     modo = ("separado" if SEPARAR else "normal") + ("-onnx" if os.environ.get("ESTAVOZ_ONNX") else "")
     cache = CACHE / modo / f"{clip.parent.parent.name}__{clip.stem}.npz"
     if cache.exists():
         d = np.load(cache)
-        return d["todo"], [d[k] for k in d.files if k.startswith("q")]
+        if "version_modelo" not in d.files or str(d["version_modelo"]) == info_mod.version:
+            return d["todo"], [d[k] for k in d.files if k.startswith("q")]
     audio = cargar_audio(clip, separar=SEPARAR, max_seg=MAX_SEG)
     todo = huellas(audio)
     paso = CONSULTA_SEG * SAMPLE_RATE
@@ -37,7 +39,7 @@ def huellas_clip(clip: Path) -> tuple[np.ndarray, list[np.ndarray]]:
     consultas = [] if clip.name.startswith("podcast_") else [huellas(audio[i:i + paso]) for i in list(inicios)[:3]]
     consultas = [c for c in consultas if len(c)]
     cache.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(cache, todo=todo, **{f"q{i}": c for i, c in enumerate(consultas)})
+    np.savez(cache, todo=todo, version_modelo=info_mod.version, **{f"q{i}": c for i, c in enumerate(consultas)})
     return todo, consultas
 
 

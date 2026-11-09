@@ -17,6 +17,7 @@ from torchaudio.compliance.kaldi import get_mel_banks
 
 RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ / "backend"))
+from metadatos_modelo import info_por_variante, inscribir_metadatos_onnx  # noqa: E402
 import voxblink  # noqa: E402
 
 N, PASO, NFFT, MEL = 400, 160, 512, 80
@@ -49,7 +50,7 @@ class FbankKaldi(nn.Module):
 
 
 class VozNavegador(nn.Module):
-    def __init__(self, variante="r34"):
+    def __init__(self, variante="r100"):
         super().__init__()
         self.fbank = FbankKaldi()
         self.red = voxblink.modelo(variante)
@@ -59,8 +60,8 @@ class VozNavegador(nn.Module):
 
 
 def main():
-    variante = sys.argv[1] if len(sys.argv) > 1 else "r34"
-    sufijo = "" if variante == "r34" else f"-{variante}"
+    variante = sys.argv[1] if len(sys.argv) > 1 else "r100"
+    sufijo = "" if variante == "r100" else f"-{variante}"
     net = VozNavegador(variante).eval()
     wav = torch.randn(1, 16000 * 6) * 0.1
     with torch.no_grad():
@@ -69,8 +70,11 @@ def main():
     print(f"fbank: diferencia máxima con Kaldi {float((a - b).abs().max()):.2e}")
 
     salida = RAIZ / "frontend" / "modelo" / f"voxblink{sufijo}.onnx"
+    salida.parent.mkdir(parents=True, exist_ok=True)
+    info_mod = info_por_variante(variante)
     torch.onnx.export(net, (wav,), str(salida), input_names=["wav"], output_names=["huella"],
                       dynamic_axes={"wav": {1: "muestras"}}, opset_version=17, dynamo=False)
+    inscribir_metadatos_onnx(salida, info_mod)
 
     from onnxruntime.quantization import QuantType, quantize_dynamic
     import onnxruntime as ort
@@ -80,6 +84,7 @@ def main():
     fbank = [n.name for n in onnx.load(str(salida)).graph.node if "fbank" in n.name.lower()]
     quantize_dynamic(str(salida), str(final), weight_type=QuantType.QUInt8,
                      op_types_to_quantize=["Conv", "MatMul", "Gemm"], nodes_to_exclude=fbank)
+    inscribir_metadatos_onnx(final, info_mod)
     for ruta in (salida, final):
         s = ort.InferenceSession(str(ruta))
         cs = []

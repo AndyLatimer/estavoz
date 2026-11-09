@@ -12,7 +12,8 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lda import entrenar_lda  # noqa: E402
+from lda import entrenar_lda, normaliza  # noqa: E402
+from metadatos_modelo import validar_compatibilidad_indice  # noqa: E402
 
 RAIZ = Path(__file__).resolve().parent.parent
 
@@ -24,10 +25,6 @@ def cargar(modo):
         if len(d["todo"]):
             clips.append((f.name.split("__")[0], d["todo"], [d[k] for k in d.files if k.startswith("q")]))
     return clips
-
-
-def normaliza(x):
-    return x / np.linalg.norm(x, axis=-1, keepdims=True)
 
 
 def preparar(clips, centrar):
@@ -439,8 +436,9 @@ def puntuacion():
     consultas de móvil de 10 s de "largos": parecido con la huella media, con los 3 trozos más
     parecidos, o una mezcla. Resultado: la mezcla 50/50 gana ~1,5 puntos a la primera y ~3 en el top 3,
     y la escala de parecido no cambia (sirve la misma traducción a porcentaje)."""
-    from lda import normaliza, proyectar
+    from lda import proyectar
     d = np.load(RAIZ / "data" / "indice.npz")
+    validar_compatibilidad_indice(d)
     X, y, c = d["vectores"], d["etiquetas"], d["clips"]
     base = np.array([x.split("#")[0] for x in c])
     actores = sorted(set(y))
@@ -467,11 +465,10 @@ def puntuacion():
     pesos = (0, .25, .5, .75, 1)
     res = {w: [0, 0, 0] for w in pesos}
     n_clips = {a: len(set(base[y == a])) for a in actores}
-    qact = sorted({q[0] for q in consultas})
     for semilla in range(2):
-        pl = dict(zip(qact, np.random.default_rng(semilla).integers(0, 5, len(qact))))
+        pl = dict(zip(actores, np.random.default_rng(semilla).integers(0, 5, len(actores))))
         for p in range(5):
-            sel = np.isin(y, [a for a in actores if n_clips[a] >= 2 and pl.get(a, -1) != p])
+            sel = np.isin(y, [a for a in actores if n_clips[a] >= 2 and pl[a] != p])
             mu, W = entrenar_lda(X[sel], y[sel])
             V = proyectar(X, mu, W)
             for act, clip, q in consultas:

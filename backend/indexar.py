@@ -18,8 +18,9 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from metadatos_modelo import validar_compatibilidad_indice  # noqa: E402
 from simular_movil import movil_real as movil  # noqa: E402
-from voz import cargar_audio, huellas  # noqa: E402
+from voz import TROZO_SEG, cargar_audio, huellas, info_modelo_actual  # noqa: E402
 
 RAIZ = Path(__file__).resolve().parent.parent
 ACTORES = RAIZ / "data" / "actores"
@@ -37,10 +38,12 @@ def main():
     p.add_argument("--parte", help="k/n: uno de cada n actores; auto: reparto dinámico entre procesos")
     args = p.parse_args()
     separar = args.separar
+    info_mod = info_modelo_actual()
     hechos = set()
     if args.nuevos and SALIDA.exists():
         previo = np.load(SALIDA)
         assert bool(previo["separado"]) == separar, "el índice existente se hizo con otro modo"
+        validar_compatibilidad_indice(previo, info_modelo=info_mod)
         hechos = set(previo["clips"])
     vectores, etiquetas, clips_id, fichas = [], [], [], {}
     rng = np.random.default_rng(1)
@@ -110,9 +113,12 @@ def main():
     if not vectores:
         sys.exit("No hay clips que indexar en data/actores/")
     np.savez(SALIDA, vectores=np.concatenate(vectores), etiquetas=np.array(etiquetas),
-             clips=np.array(clips_id), separado=separar)
+             clips=np.array(clips_id), separado=separar,
+             modelo_version=info_mod.version, modelo_arquitectura=info_mod.arquitectura,
+             modelo_variante=info_mod.variante, modelo_sha256=info_mod.sha256_onnx or "",
+             trozo_seg=TROZO_SEG)
     (RAIZ / "data" / "fichas.json").write_text(json.dumps(fichas, ensure_ascii=False, indent=1), encoding="utf-8")
-    print(f"Índice guardado: {len(fichas)} actores, {len(etiquetas)} trozos")
+    print(f"Índice guardado ({info_mod.arquitectura}, v{info_mod.version}): {len(fichas)} actores, {len(etiquetas)} trozos")
 
 
 if __name__ == "__main__":

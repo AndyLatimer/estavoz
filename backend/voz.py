@@ -7,7 +7,17 @@ from pathlib import Path
 
 import numpy as np
 import soundfile as sf
-import torch
+
+try:
+    import torch
+    _no_grad = torch.no_grad
+except ImportError:  # permite usar ONNX y ejecutar tests sin PyTorch instalado
+    torch = None
+
+    def _no_grad():
+        return lambda f: f
+
+from metadatos_modelo import InfoModelo, info_por_version, inspeccionar_onnx
 
 SAMPLE_RATE = 16000
 TROZO_SEG = 6        # cada clip se parte en trozos de 6 s
@@ -22,7 +32,7 @@ def separador():
     return m
 
 
-@torch.no_grad()
+@_no_grad()
 def solo_voz(estereo_44k: np.ndarray) -> np.ndarray:
     """Quita música y efectos con Demucs. Entra estéreo 44.1 kHz, sale mono 16 kHz."""
     from demucs.apply import apply_model
@@ -82,7 +92,16 @@ def sesion_onnx():
     return ort.InferenceSession(ONNX, opciones)
 
 
-@torch.no_grad()
+@lru_cache(maxsize=1)
+def info_modelo_actual() -> InfoModelo:
+    """Devuelve los metadatos inequívocos del modelo activo (ONNX o ECAPA por defecto)."""
+    ruta_onnx = os.environ.get("ESTAVOZ_ONNX") or ONNX
+    if ruta_onnx:
+        return inspeccionar_onnx(ruta_onnx)
+    return info_por_version("1")
+
+
+@_no_grad()
 def huella_trozo(trozo: np.ndarray) -> np.ndarray:
     if ONNX:
         return sesion_onnx().run(None, {"wav": trozo[None].astype(np.float32)})[0][0]
@@ -90,7 +109,7 @@ def huella_trozo(trozo: np.ndarray) -> np.ndarray:
 
 
 def huellas(audio: np.ndarray) -> np.ndarray:
-    """Una huella normalizada (192 números) por cada trozo del audio."""
+    """Una huella normalizada (256 números en VoxBlink2, 192 en ECAPA) por cada trozo del audio."""
     partes = trozos(audio)
     if not partes:
         dim = sesion_onnx().get_outputs()[0].shape[-1] if ONNX else 192
