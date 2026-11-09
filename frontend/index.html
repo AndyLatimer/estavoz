@@ -164,6 +164,8 @@
   .acciones button { flex: 1; padding: 14px 10px; border-radius: 4px; font: 600 12px var(--mono); letter-spacing: .12em; text-transform: uppercase; cursor: pointer;
                      background: transparent; color: var(--papel); border: 1px solid var(--papel); }
   .acciones button.prim { background: var(--rojo); border-color: var(--rojo); }
+  .acciones button.sec { border-color: var(--ambar); color: var(--ambar); }
+  .acciones button.sec:hover { background: rgba(242,177,52,.12); }
   .otro { display: flex; align-items: center; gap: 14px; padding: 10px 0; border-bottom: 1px dashed var(--linea); }
   .otro:last-child { border-bottom: 0; padding-bottom: 0; }
   .otro .n { font-size: 20px; font-weight: 600; }
@@ -265,7 +267,8 @@ const codigo = seg => {
 let sesion, ldaMu, ldaW, centroides, trozos, actores, dim, umbrales;
 const UMBRALES_DEFECTO = {
   umbral_fiable: 0.3663, umbral_dudoso: 0.252, margen_fiable: 0.1115, margen_dudoso: 0.0502,
-  z_fiable: 5.3001, descuento_contexto_max: 0.035, umbral_1a1_fiable: 0.337, umbral_1a1_dudoso: 0.2319
+  z_fiable: 5.3001, descuento_contexto_max: 0.035, umbral_1a1_fiable: 0.337, umbral_1a1_dudoso: 0.2319,
+  beta_exceso_trozos: 0.012
 };
 
 // Descarga con barra de progreso (el modelo pesa ~52 MB la primera vez)
@@ -306,19 +309,29 @@ async function cargar() {
     $('carga').remove();
     estado.textContent = 'Sala lista. Cuando quieras.';
     btn.disabled = false;
+    // Pre-cargar la base de datos de películas y series en segundo plano cuando la CPU esté libre
+    if (window.requestIdleCallback) requestIdleCallback(() => cargarBusqueda());
+    else setTimeout(cargarBusqueda, 1200);
   } catch (e) {
     console.error(e);
     estado.textContent = 'No se pudo preparar la sala. Recarga la página.';
   }
 }
 
-// Cualquier audio -> mono 16 kHz
+// Cualquier audio -> mono 16 kHz con filtrado de retumbes y ruido sub-grave (paso alto 85 Hz)
 async function a16k(blob) {
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
   const buf = await ctx.decodeAudioData(await blob.arrayBuffer());
   ctx.close();
   const off = new OfflineAudioContext(1, Math.ceil(buf.duration * SR), SR);
-  const src = off.createBufferSource(); src.buffer = buf; src.connect(off.destination); src.start();
+  const src = off.createBufferSource(); src.buffer = buf;
+  const filtro = off.createBiquadFilter();
+  filtro.type = 'highpass';
+  filtro.frequency.value = 85;
+  filtro.Q.value = 0.707;
+  src.connect(filtro);
+  filtro.connect(off.destination);
+  src.start();
   return (await off.startRendering()).getChannelData(0);
 }
 
@@ -443,6 +456,19 @@ function juntarSegmentos(audio, segs) {
   return out;
 }
 
+function normalizarPico(audio, objetivo = 0.75) {
+  let pico = 0;
+  for (let i = 0; i < audio.length; i++) {
+    const v = Math.abs(audio[i]);
+    if (v > pico) pico = v;
+  }
+  if (pico < 1e-4) return audio;
+  const factor = objetivo / pico;
+  const out = new Float32Array(audio.length);
+  for (let i = 0; i < audio.length; i++) out[i] = audio[i] * factor;
+  return out;
+}
+
 async function huellaTrozo(t) {
   const r = await sesion.run({ wav: new ort.Tensor('float32', t, [1, t.length]) });
   const v = r.huella.data, n = Math.hypot(...v);
@@ -459,11 +485,18 @@ async function huellasDe(audio) {
   return out;
 }
 
-// Audio crudo del micrófono (a la frecuencia del móvil) -> mono 16 kHz
+// Audio crudo del micrófono (a la frecuencia del móvil) -> mono 16 kHz con filtro paso alto 85 Hz
 async function remuestrear(datos, tasa) {
   const off = new OfflineAudioContext(1, Math.ceil(datos.length * SR / tasa), SR);
   const buf = off.createBuffer(1, datos.length, tasa); buf.copyToChannel(datos, 0);
-  const src = off.createBufferSource(); src.buffer = buf; src.connect(off.destination); src.start();
+  const src = off.createBufferSource(); src.buffer = buf;
+  const filtro = off.createBiquadFilter();
+  filtro.type = 'highpass';
+  filtro.frequency.value = 85;
+  filtro.Q.value = 0.707;
+  src.connect(filtro);
+  filtro.connect(off.destination);
+  src.start();
   return (await off.startRendering()).getChannelData(0);
 }
 
@@ -675,10 +708,23 @@ async function identificar(blob, huellasListas = null, audioPreprocesado = null)
       }
 
       // Aislar exclusivamente tramos de voz activa eliminando silencios y música instrumental
-      const soloVoz = juntarSegmentos(audio, vad.segmentos);
-      consulta = await huellasDe(soloVoz);
+      const soloVoz = normalizarPico(juntarSegmentos(audio, vad.segmentos));
+      const consultaNueva = await huellasDe(soloVoz);
+
+      if (acumulandoToma && ultimaConsulta && ultimaConsulta.length) {
+        tomasAcumuladas++;
+        duracionVozAcumulada += vad.duracionVoz;
+        consulta = [...ultimaConsulta, ...consultaNueva];
+        acumulandoToma = false;
+      } else {
+        tomasAcumuladas = 1;
+        duracionVozAcumulada = vad.duracionVoz;
+        consulta = consultaNueva;
+      }
     } else {
       consulta = await huellasListas;
+      tomasAcumuladas = 1;
+      duracionVozAcumulada = 10.0;
     }
 
     if (!consulta || !consulta.length) throw new Error('corto');
@@ -703,8 +749,18 @@ btn.onclick = async () => {
 
   // vúmetro y brillo del botón con el volumen en directo
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const fuente = ctx.createMediaStreamSource(stream);
+
+  // Filtro paso alto a 85 Hz: corta retumbes subsónicos, viento y zumbidos sin tocar los formantes vocales
+  const filtroPasoAlto = ctx.createBiquadFilter();
+  filtroPasoAlto.type = 'highpass';
+  filtroPasoAlto.frequency.value = 85;
+  filtroPasoAlto.Q.value = 0.707;
+  fuente.connect(filtroPasoAlto);
+
   const analizador = ctx.createAnalyser(); analizador.fftSize = 1024;
-  ctx.createMediaStreamSource(stream).connect(analizador);
+  filtroPasoAlto.connect(analizador);
+
   const onda = new Float32Array(analizador.fftSize);
   let vivo = true, pico = 0, muestrasVozVivo = 0;
   (function mide() {
@@ -717,16 +773,17 @@ btn.onclick = async () => {
     document.documentElement.style.setProperty('--nivel', nivel.toFixed(3));
     if (nivel > 0.18) muestrasVozVivo += analizador.fftSize;
     const segVoz = (muestrasVozVivo / ctx.sampleRate).toFixed(1);
-    estado.textContent = `Toma ${String(toma).padStart(2, '0')}. Silencio, se graba · ${segVoz} s de voz`;
+    estado.textContent = acumulandoToma
+      ? `Sumando toma ${String(toma).padStart(2, '0')}. Silencio, se graba · ${segVoz} s de voz nueva`
+      : `Toma ${String(toma).padStart(2, '0')}. Silencio, se graba · ${segVoz} s de voz`;
     requestAnimationFrame(mide);
   })();
 
-  // audio crudo del micrófono
-  const fuente = ctx.createMediaStreamSource(stream);
+  // audio crudo del micrófono (ya filtrado de retumbes a 85 Hz)
   const captura = ctx.createScriptProcessor(4096, 1, 1);
   const bloques = []; let muestras = 0;
   captura.onaudioprocess = e => { const d = e.inputBuffer.getChannelData(0); bloques.push(new Float32Array(d)); muestras += d.length; };
-  fuente.connect(captura); captura.connect(ctx.destination);
+  filtroPasoAlto.connect(captura); captura.connect(ctx.destination);
   const juntar = () => { const a = new Float32Array(muestras); let o = 0; for (const b of bloques) { a.set(b, o); o += b.length; } return a; };
   const tasa = ctx.sampleRate;
 
@@ -786,8 +843,13 @@ function papel(t) {
   return m ? { personaje: m[1], obra: m[2], anio: m[3] } : { personaje: t, obra: '', anio: '' };
 }
 
-let ultimo, ultimaConsulta, ultimaPista;
+let ultimo, ultimaConsulta, ultimaPista, acumulandoToma = false, tomasAcumuladas = 1, duracionVozAcumulada = 0;
 const CONFIG = window.ESTAVOZ_CONFIG || {};
+
+function sumarToma() {
+  acumulandoToma = true;
+  btn.click();
+}
 
 // "¿Acertamos?": se guarda solo la huella de voz (unos números), nunca el audio.
 function pregunta(otros) {
@@ -864,11 +926,14 @@ function pintar(lista) {
       </div>
     </div>` : '';
 
+  const acumHtml = tomasAcumuladas > 1 ? `<div class="dato" style="margin-top:6px; color:var(--ambar); font-weight:600">TOMA ACUMULADA · COMBINANDO ${tomasAcumuladas} TOMAS (${duracionVozAcumulada.toFixed(1)} s DE VOZ)</div>` : '';
+
   res.innerHTML = `
     ${dialogoHtml}
     <article class="ficha principal">
       <div class="rotulo"><span>TOMA ${String(toma).padStart(2, '0')}</span><span>${rotuloFicha}</span></div>
       ${ultimaPista ? `<div class="dato" style="margin-top:6px">ENTRE ${ultimaPista.n} ${ultimaPista.n === 1 ? 'VOZ' : 'VOCES'} DE «${esc(ultimaPista.texto.toUpperCase())}»</div>` : ''}
+      ${acumHtml}
       <div class="quien">
         ${foto(top)}
         <div>
@@ -891,6 +956,7 @@ function pintar(lista) {
         <button onclick="pedirPista()">Decir qué estoy viendo</button></div>`}
       <div class="acciones">
         <button class="prim" onclick="btn.click()">Otra toma</button>
+        ${estadoId === 'dudoso' ? '<button class="sec" onclick="sumarToma()">Sumar toma (+)</button>' : ''}
         <button onclick="compartir()">Compartir</button>
       </div>
       ${pregunta(otros)}

@@ -60,6 +60,8 @@ class UmbralesRechazo:
     # Suelo de verificación 1-a-1 cuando el filtro contextual deja un único candidato (N_ctx == 1)
     umbral_1a1_fiable: float = 0.30
     umbral_1a1_dudoso: float = 0.23
+    # Penalización logarítmica de exceso de trozos para corregir la ventaja estadística de 'actores imán' (hubness)
+    beta_exceso_trozos: float = 0.012
     origen_calibracion: str = "validacion"
     metricas_validacion: dict[str, float] | None = None
 
@@ -77,6 +79,7 @@ class UmbralesRechazo:
             descuento_contexto_max=float(d.get("descuento_contexto_max", 0.035)),
             umbral_1a1_fiable=float(d.get("umbral_1a1_fiable", 0.30)),
             umbral_1a1_dudoso=float(d.get("umbral_1a1_dudoso", 0.23)),
+            beta_exceso_trozos=float(d.get("beta_exceso_trozos", 0.012)),
             origen_calibracion=str(d.get("origen_calibracion", "dict")),
             metricas_validacion=d.get("metricas_validacion"),
         )
@@ -94,6 +97,7 @@ UMBRALES_VOXBLINK_R100_CALIBRADOS = UmbralesRechazo(
     descuento_contexto_max=0.035,
     umbral_1a1_fiable=0.3370,
     umbral_1a1_dudoso=0.2319,
+    beta_exceso_trozos=0.012,
     origen_calibracion="voxblink2_r100_836_actores",
 )
 

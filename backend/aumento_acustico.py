@@ -348,3 +348,83 @@ def simular_sala_tv(
     rms_nuevo = math.sqrt(float(np.mean(altavoz * altavoz)) + 1e-12)
     escala = rms_orig / max(rms_nuevo, 1e-8)
     return (altavoz * escala).astype(np.float32)
+
+
+def normalizar_amplitud_pico(audio: np.ndarray, pico_objetivo: float = 0.75) -> np.ndarray:
+    """Normaliza la amplitud pico del audio a un nivel nominal (-2.5 dB) para consistencia en inferencia."""
+    audio = np.asarray(audio, dtype=np.float32)
+    pico = float(np.max(np.abs(audio))) if len(audio) else 0.0
+    if pico < 1e-5:
+        return audio
+    factor = pico_objetivo / pico
+    return (audio * factor).astype(np.float32)
+
+
+def estimar_f0_mediana(
+    audio: np.ndarray,
+    sr: int = 16000,
+    f0_min: float = 75.0,
+    f0_max: float = 350.0,
+) -> float | None:
+    """Estima el tono fundamental medio (F0 en Hz) mediante autocorrelación normalizada en tramas sonoras.
+
+    Permite clasificar el registro vocal del interlocutor (grave, barítono, agudo/femenino)
+    para descartar candidatos anatómicamente incompatibles. Devuelve None si no hay suficiente voz.
+    """
+    audio = np.asarray(audio, dtype=np.float32)
+    if len(audio) < int(sr * 0.15):
+        return None
+
+    tam_trama = int(sr * 0.035)  # 35 ms
+    paso = int(sr * 0.015)       # 15 ms
+    lag_min = max(2, int(sr / f0_max))
+    lag_max = min(tam_trama - 2, int(sr / f0_min))
+
+    n_tramas = (len(audio) - tam_trama) // paso
+    if n_tramas <= 0:
+        return None
+
+    f0s: list[float] = []
+    for i in range(n_tramas):
+        o = i * paso
+        trama = audio[o : o + tam_trama]
+        e = float(np.sum(trama * trama))
+        if e < 1e-6:
+            continue
+        # Autocorrelación normalizada
+        r = np.correlate(trama, trama, mode="full")[tam_trama - 1 :]
+        r_norm = r / (math.sqrt(e * max(float(r[0]), 1e-9)) + 1e-9)
+
+        r_sub = r_norm[lag_min : lag_max + 1]
+        idx_pico = int(np.argmax(r_sub))
+        val_pico = float(r_sub[idx_pico])
+        lag_opt = lag_min + idx_pico
+
+        # Umbral de periodicidad armónica
+        if val_pico >= 0.35 and 1 < lag_opt < len(r_norm) - 1:
+            # Interpolación parabólica sub-muestra
+            alfa = float(r_norm[lag_opt - 1])
+            beta = float(r_norm[lag_opt])
+            gamma = float(r_norm[lag_opt + 1])
+            denom = 2.0 * (2.0 * beta - alfa - gamma)
+            delta = (alfa - gamma) / denom if abs(denom) > 1e-8 else 0.0
+            lag_fino = lag_opt + delta
+            f0 = sr / float(lag_fino)
+            if f0_min <= f0 <= f0_max:
+                f0s.append(f0)
+
+    if len(f0s) < 3:
+        return None
+    return float(np.median(f0s))
+
+
+def clasificar_registro_vocal(f0_hz: float | None) -> str:
+    """Clasifica el registro vocal según F0: 'grave' (<135 Hz), 'medio' (135-175 Hz), 'agudo' (>175 Hz)."""
+    if f0_hz is None:
+        return "desconocido"
+    if f0_hz < 135.0:
+        return "grave"
+    if f0_hz > 175.0:
+        return "agudo"
+    return "medio"
+

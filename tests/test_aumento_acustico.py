@@ -152,3 +152,51 @@ def test_lda_con_covarianza_acustica():
     assert p_ac.shape == (len(X_limpio), 8)
     assert np.allclose(np.linalg.norm(p_ac, axis=1), 1.0, atol=1e-5)
 
+
+def test_estimar_f0_y_registro_vocal():
+    from backend.aumento_acustico import (
+        clasificar_registro_vocal,
+        estimar_f0_mediana,
+        normalizar_amplitud_pico,
+    )
+
+    sr = 16000
+    dur = 1.0
+    t = np.arange(int(sr * dur), dtype=np.float32) / sr
+
+    # 1. Señal grave F0 = 110 Hz (voz masculina grave) con armónicos
+    f0_grave = 110.0
+    sig_grave = (
+        0.6 * np.sin(2 * np.pi * f0_grave * t)
+        + 0.3 * np.sin(2 * np.pi * 2 * f0_grave * t)
+        + 0.1 * np.sin(2 * np.pi * 3 * f0_grave * t)
+    ).astype(np.float32)
+
+    # 2. Señal aguda F0 = 220 Hz (voz femenina/aguda) con armónicos
+    f0_aguda = 220.0
+    sig_aguda = (
+        0.6 * np.sin(2 * np.pi * f0_aguda * t)
+        + 0.3 * np.sin(2 * np.pi * 2 * f0_aguda * t)
+        + 0.1 * np.sin(2 * np.pi * 3 * f0_aguda * t)
+    ).astype(np.float32)
+
+    # Estimación de tono
+    est_grave = estimar_f0_mediana(sig_grave, sr=sr)
+    est_aguda = estimar_f0_mediana(sig_aguda, sr=sr)
+
+    assert est_grave is not None
+    assert est_aguda is not None
+    assert abs(est_grave - f0_grave) < 5.0
+    assert abs(est_aguda - f0_aguda) < 5.0
+
+    # Clasificación de registro
+    assert clasificar_registro_vocal(est_grave) == "grave"
+    assert clasificar_registro_vocal(est_aguda) == "agudo"
+    assert clasificar_registro_vocal(150.0) == "medio"
+    assert clasificar_registro_vocal(None) == "desconocido"
+
+    # Normalización de pico
+    sig_norm = normalizar_amplitud_pico(sig_grave, pico_objetivo=0.75)
+    assert np.isclose(np.max(np.abs(sig_norm)), 0.75, atol=1e-3)
+
+
