@@ -25,8 +25,9 @@ CONSULTA_SEG = 8
 def huellas_clip(clip: Path) -> tuple[np.ndarray, list[np.ndarray]]:
     """Huellas del clip entero y de varias consultas de 8 s sacadas de él (con caché)."""
     import os
+    from voz import ONNX
     info_mod = info_modelo_actual()
-    modo = ("separado" if SEPARAR else "normal") + ("-onnx" if os.environ.get("ESTAVOZ_ONNX") else "")
+    modo = ("separado" if SEPARAR else "normal") + (f"-onnx-{info_mod.variante}" if ONNX else "")
     cache = CACHE / modo / f"{clip.parent.parent.name}__{clip.stem}.npz"
     if cache.exists():
         d = np.load(cache)
