@@ -4,6 +4,7 @@ Arranque: .venv/bin/uvicorn backend.app:app --port 8000
 """
 from contextlib import asynccontextmanager
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -130,21 +131,28 @@ def salud():
 async def identificar(audio: UploadFile):
     if not INDICE:
         raise HTTPException(503, "Aún no hay actores indexados")
-    with tempfile.NamedTemporaryFile(suffix=Path(audio.filename or "a.webm").suffix) as tmp:
+    sufijo = Path(audio.filename or "a.webm").suffix or ".webm"
+    with tempfile.NamedTemporaryFile(suffix=sufijo, delete=False) as tmp:
         tmp.write(await audio.read())
-        tmp.flush()
+        tmp_name = tmp.name
+    try:
         try:
-            consulta = huellas(cargar_audio(tmp.name, separar=INDICE["separar"], max_seg=20))
+            consulta = huellas(cargar_audio(tmp_name, separar=INDICE["separar"], max_seg=20))
         except Exception:
             raise HTTPException(400, "No se pudo leer el audio")
+    finally:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
     if len(consulta) == 0:
-        raise HTTPException(400, "Audio demasiado corto: graba al menos 3 segundos")
+        raise HTTPException(400, "Audio demasiado corto: graba al menos 2 segundos")
     ranking = _ranking_completo(consulta)
     puntuaciones = np.array([s for s, _ in ranking], dtype=np.float32)
     slugs = [slug for _, slug in ranking]
     decision = clasificar_consulta(
-        puntuaciones_ordenadas=puntuaciones,
-        candidatos_ordenados=slugs,
+        puntuaciones=puntuaciones,
+        ids_candidatos=slugs,
         umbrales=UMBRALES_VOXBLINK_R100_CALIBRADOS,
         n_galeria_total=len(slugs),
         con_contexto=False,

@@ -60,15 +60,45 @@ def cargar_audio(ruta: str | Path, separar: bool = False, max_seg: int | None = 
 
     separar=True quita antes la música y los efectos (más lento).
     """
+    ruta = Path(ruta)
     canales, frecuencia = ("2", "44100") if separar else ("1", str(SAMPLE_RATE))
     limite = ["-t", str(max_seg)] if max_seg else []
-    with tempfile.NamedTemporaryFile(suffix=".wav") as tmp:
+
+    # 1. Intentar decodificación directa con soundfile (WAV, FLAC, OGG...) sin requerir ffmpeg externo
+    if not separar:
+        try:
+            audio, sr_origen = sf.read(str(ruta), dtype="float32")
+            if audio.ndim > 1:
+                audio = audio.mean(axis=1)
+            if sr_origen != SAMPLE_RATE:
+                n_salida = int(round(len(audio) * SAMPLE_RATE / sr_origen))
+                audio = np.interp(
+                    np.linspace(0, len(audio), n_salida, endpoint=False),
+                    np.arange(len(audio)),
+                    audio,
+                ).astype(np.float32)
+            if max_seg:
+                audio = audio[: int(max_seg * SAMPLE_RATE)]
+            return audio
+        except Exception:
+            pass
+
+    # 2. Si requiere demuxing/conversión (mp3, webm, mp4...) o separación demucs, usar ffmpeg
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp_name = tmp.name
+    try:
         subprocess.run(
             ["ffmpeg", "-y", "-loglevel", "error", "-i", str(ruta), *limite,
-             "-ac", canales, "-ar", frecuencia, tmp.name],
+             "-ac", canales, "-ar", frecuencia, tmp_name],
             check=True,
         )
-        audio, _ = sf.read(tmp.name, dtype="float32")
+        audio, _ = sf.read(tmp_name, dtype="float32")
+    finally:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+
     return solo_voz(audio) if separar else audio
 
 
@@ -88,7 +118,11 @@ def trozos(audio: np.ndarray, filtrar_silencio: bool = False) -> list[np.ndarray
 
 # Con ESTAVOZ_ONNX=ruta.onnx se usa el mismo modelo que corre en el navegador,
 # para que las huellas del índice y las del móvil salgan idénticas.
-ONNX = os.environ.get("ESTAVOZ_ONNX")
+# Si no se define expresamente, pero existe el ONNX en frontend/modelo/voxblink-int8.onnx,
+# se utiliza directamente para asegurar coherencia con los artefactos publicados y evitar
+# caídas accidentales a ECAPA (Fase 1 / Fase 4 de la auditoría).
+_RUTA_ONNX_DEFECTO = Path(__file__).resolve().parent.parent / "frontend" / "modelo" / "voxblink-int8.onnx"
+ONNX = os.environ.get("ESTAVOZ_ONNX") or (str(_RUTA_ONNX_DEFECTO) if _RUTA_ONNX_DEFECTO.exists() else None)
 
 
 @lru_cache(maxsize=1)
