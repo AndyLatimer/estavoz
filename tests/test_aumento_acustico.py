@@ -1,8 +1,13 @@
 """Tests para el módulo de aumento acústico, VAD y segmentación de intervenciones."""
+import sys
+from pathlib import Path
 import numpy as np
 import pytest
 
-from backend.aumento_acustico import (
+RAIZ = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(RAIZ / "backend"))
+
+from aumento_acustico import (
     DetectorVoz,
     ResultadoVAD,
     aislar_voz_continua,
@@ -114,7 +119,7 @@ def test_simular_sala_tv():
 
 
 def test_lda_con_covarianza_acustica():
-    from backend.lda import entrenar_lda, estimar_covarianza_canal, proyectar, normaliza
+    from lda import entrenar_lda, estimar_covarianza_canal, proyectar, normaliza
 
     rng = np.random.default_rng(123)
     dim = 16
@@ -154,7 +159,7 @@ def test_lda_con_covarianza_acustica():
 
 
 def test_estimar_f0_y_registro_vocal():
-    from backend.aumento_acustico import (
+    from aumento_acustico import (
         clasificar_registro_vocal,
         estimar_f0_mediana,
         normalizar_amplitud_pico,

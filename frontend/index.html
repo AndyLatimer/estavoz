@@ -119,6 +119,17 @@
   #btn:active { transform: scale(.97); }
   #btn:disabled { cursor: default; opacity: .45; }
   .grabando #btn, .analizando #btn { opacity: 1; }
+  .grabando #btn { border-color: var(--rojo); cursor: pointer; }
+  .grabando #btn .rec { border-radius: 20px; width: 76px; height: 76px; transition: all .2s; }
+  .grabando #btn svg { display: none; }
+  .grabando #btn::after {
+    content: "PARAR";
+    font: 700 12px var(--mono);
+    letter-spacing: .12em;
+    color: var(--papel);
+    position: absolute;
+    pointer-events: none;
+  }
   .analizando #btn .rec { background: radial-gradient(circle at 35% 30%, #ffd27a, var(--ambar) 45%, #a8700b); animation: late 1s ease-in-out infinite; }
   @keyframes late { 50% { transform: scale(.92); } }
 
@@ -166,6 +177,12 @@
   .acciones button.prim { background: var(--rojo); border-color: var(--rojo); }
   .acciones button.sec { border-color: var(--ambar); color: var(--ambar); }
   .acciones button.sec:hover { background: rgba(242,177,52,.12); }
+  .verificacion-actor { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 18px; padding: 12px 14px; background: rgba(243,234,216,.04); border: 1px solid var(--linea); border-radius: 6px; flex-wrap: wrap; }
+  .btn-muestra { display: inline-flex; align-items: center; gap: 8px; background: rgba(243,234,216,.08); color: var(--papel); border: 1px solid var(--linea); border-radius: 4px; padding: 8px 12px; font: 600 11px var(--mono); letter-spacing: .08em; text-transform: uppercase; cursor: pointer; transition: background .15s, border-color .15s; }
+  .btn-muestra:hover { background: rgba(243,234,216,.14); border-color: var(--papel); }
+  .btn-muestra svg { flex-shrink: 0; }
+  .enlace-ficha { font: 12px var(--mono); color: var(--gris); text-decoration: underline; text-underline-offset: 3px; }
+  .enlace-ficha:hover { color: var(--papel); }
   .otro { display: flex; align-items: center; gap: 14px; padding: 10px 0; border-bottom: 1px dashed var(--linea); }
   .otro:last-child { border-bottom: 0; padding-bottom: 0; }
   .otro .n { font-size: 20px; font-weight: 600; }
@@ -271,18 +288,51 @@ const UMBRALES_DEFECTO = {
   beta_exceso_trozos: 0.012
 };
 
-// Descarga con barra de progreso (el modelo pesa ~52 MB la primera vez)
-async function descargar(url, alAvanzar) {
+// Almacenamiento persistente en navegador (CacheStorage) para arranque instantáneo (<200 ms) tras la 1ª visita
+const CACHE_ARTEFACTOS = 'estavoz-v3-artefactos';
+
+async function descargar(url, alAvanzar = () => {}) {
+  if ('caches' in window) {
+    try {
+      const cache = await caches.open(CACHE_ARTEFACTOS);
+      const guardado = await cache.match(url);
+      if (guardado) {
+        alAvanzar(1);
+        const buf = await guardado.arrayBuffer();
+        return new Uint8Array(buf);
+      }
+    } catch (e) {
+      console.warn('CacheStorage no disponible en este entorno:', e);
+    }
+  }
+
   const r = await fetch(url);
   const total = +r.headers.get('content-length') || 0;
-  if (!total || !r.body) return new Uint8Array(await r.arrayBuffer());
-  const datos = new Uint8Array(total); let hecho = 0;
-  const lector = r.body.getReader();
-  for (;;) {
-    const { done, value } = await lector.read();
-    if (done) break;
-    datos.set(value, hecho); hecho += value.length; alAvanzar(hecho / total);
+  let datos;
+  if (!total || !r.body) {
+    datos = new Uint8Array(await r.arrayBuffer());
+    alAvanzar(1);
+  } else {
+    datos = new Uint8Array(total); let hecho = 0;
+    const lector = r.body.getReader();
+    for (;;) {
+      const { done, value } = await lector.read();
+      if (done) break;
+      datos.set(value, hecho); hecho += value.length; alAvanzar(hecho / total);
+    }
   }
+
+  if ('caches' in window) {
+    try {
+      const cache = await caches.open(CACHE_ARTEFACTOS);
+      await cache.put(url, new Response(datos.buffer, {
+        headers: { 'Content-Type': 'application/octet-stream' }
+      }));
+    } catch (e) {
+      console.warn('No se pudo guardar en CacheStorage:', e);
+    }
+  }
+
   return datos;
 }
 
@@ -291,10 +341,10 @@ async function cargar() {
   try {
     const [modelo, lda, cent, troz, meta] = await Promise.all([
       descargar('modelo/voxblink-int8.onnx', p => { barra.style.width = `${p * 100}%`; estado.textContent = `Preparando la sala… ${Math.round(p * 100)}%`; }),
-      fetch('datos/lda.bin').then(r => r.arrayBuffer()),
-      fetch('datos/centroides.bin').then(r => r.arrayBuffer()),
-      fetch('datos/trozos.bin').then(r => r.arrayBuffer()),
-      fetch('datos/actores.json').then(r => r.json()),
+      descargar('datos/lda.bin').then(u8 => u8.buffer),
+      descargar('datos/centroides.bin').then(u8 => u8.buffer),
+      descargar('datos/trozos.bin').then(u8 => u8.buffer),
+      descargar('datos/actores.json').then(u8 => JSON.parse(new TextDecoder().decode(u8))),
     ]);
     sesion = await ort.InferenceSession.create(modelo);
     dim = meta.dim; actores = meta.actores; umbrales = { ...UMBRALES_DEFECTO, ...(meta.umbrales_rechazo || {}) };
@@ -739,7 +789,19 @@ async function identificar(blob, huellasListas = null, audioPreprocesado = null)
   btn.disabled = false;
 }
 
+let grabacionActiva = null;
+
 btn.onclick = async () => {
+  if (grabacionActiva) {
+    const transcurrido = (performance.now() - grabacionActiva.t0) / 1000;
+    if (transcurrido < 1.8) {
+      estado.textContent = 'Espera al menos 2 segundos de voz antes de parar…';
+      return;
+    }
+    grabacionActiva.detener();
+    return;
+  }
+
   let stream;
   try {
     // sin filtros del móvil: la supresión de ruido estropea la voz que sale de la tele
@@ -788,26 +850,37 @@ btn.onclick = async () => {
   const tasa = ctx.sampleRate;
 
   res.innerHTML = '';
-  btn.disabled = true; modo('grabando');
+  modo('grabando');
+  btn.disabled = false; // permite pulsar 'PARAR' antes de agotar los 10 segundos
   toma++;
   estado.textContent = `Toma ${String(toma).padStart(2, '0')}. Silencio, se graba · 0.0 s de voz`;
   const t0 = performance.now();
+  let grabacionTerminada = false;
+
   (function avanza() {
     const p = Math.min(1, (performance.now() - t0) / (SEGUNDOS * 1000));
     aro.style.strokeDashoffset = ARO * (1 - p);
-    tc.textContent = codigo(SEGUNDOS * (1 - p));
-    if (p < 1 && vivo) requestAnimationFrame(avanza);
+    tc.textContent = codigo(Math.max(0, SEGUNDOS * (1 - p)));
+    if (p < 1 && vivo && !grabacionTerminada) requestAnimationFrame(avanza);
   })();
 
-  setTimeout(async () => {
+  const finalizarGrabacion = async () => {
+    if (grabacionTerminada) return;
+    grabacionTerminada = true;
+    grabacionActiva = null;
+    clearTimeout(temporizadorFin);
     vivo = false;
+    btn.disabled = true;
     captura.disconnect(); fuente.disconnect();
     stream.getTracks().forEach(t => t.stop());
     document.documentElement.style.setProperty('--nivel', 0);
     const a = await remuestrear(juntar(), tasa);
     ctx.close();
     identificar(null, null, a);
-  }, SEGUNDOS * 1000);
+  };
+
+  grabacionActiva = { t0, detener: finalizarGrabacion };
+  const temporizadorFin = setTimeout(finalizarGrabacion, SEGUNDOS * 1000);
 };
 
 $('fichero').onchange = e => {
@@ -892,6 +965,52 @@ async function responder(acierto, real = null) {
   } catch (e) { console.error(e); }
 }
 
+let audioMuestra = null, btnMuestraActivo = null;
+
+function reproducirMuestra(idNum, btnEl) {
+  const url = `https://www.eldoblaje.com/datos/Muestras/${idNum}.mp3`;
+  if (audioMuestra && !audioMuestra.paused && audioMuestra.dataset.id === idNum) {
+    audioMuestra.pause();
+    actualizarBotonMuestra(btnEl, false);
+    return;
+  }
+  if (audioMuestra) {
+    audioMuestra.pause();
+    if (btnMuestraActivo) actualizarBotonMuestra(btnMuestraActivo, false);
+  }
+  audioMuestra = new Audio(url);
+  audioMuestra.dataset.id = idNum;
+  btnMuestraActivo = btnEl;
+  actualizarBotonMuestra(btnEl, true);
+  audioMuestra.onended = () => {
+    actualizarBotonMuestra(btnEl, false);
+    btnMuestraActivo = null;
+  };
+  audioMuestra.onerror = () => {
+    actualizarBotonMuestra(btnEl, false);
+    btnEl.innerHTML = '<span>Muestra no disponible</span>';
+    btnEl.disabled = true;
+    btnMuestraActivo = null;
+  };
+  audioMuestra.play().catch(() => {
+    actualizarBotonMuestra(btnEl, false);
+    btnMuestraActivo = null;
+  });
+}
+
+function actualizarBotonMuestra(btnEl, sonando) {
+  if (!btnEl) return;
+  if (sonando) {
+    btnEl.innerHTML = `<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg><span>Detener muestra</span>`;
+    btnEl.style.borderColor = 'var(--ambar)';
+    btnEl.style.color = 'var(--ambar)';
+  } else {
+    btnEl.innerHTML = `<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg><span>Escuchar muestra oficial</span>`;
+    btnEl.style.borderColor = '';
+    btnEl.style.color = '';
+  }
+}
+
 function pintar(lista) {
   const [top, ...otros] = lista;
   const estadoId = lista.estado || (aPorcentajeCalibrado(top.parecido) >= 50 ? 'identificado' : 'dudoso');
@@ -907,6 +1026,17 @@ function pintar(lista) {
   let papeles = (top.trabajos || []).slice(0, 4).map(papel);
   if (top.papelPista) papeles = [{ ...top.papelPista, destacado: true }, ...papeles.filter(p => p.obra !== top.papelPista.obra)].slice(0, 4);
   res.dataset.otros = JSON.stringify(otros.map(o => ({ id: o.id, nombre: o.nombre })));
+
+  const idNumTop = String(top.id).split('-')[0];
+  const urlFichaTop = `https://www.eldoblaje.com/datos/FichaActorDoblaje.asp?id=${idNumTop}`;
+  const verificacionHtml = /^\d+$/.test(idNumTop) ? `
+    <div class="verificacion-actor">
+      <button type="button" class="btn-muestra" onclick="reproducirMuestra('${idNumTop}', this)">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg>
+        <span>Escuchar muestra oficial</span>
+      </button>
+      <a class="enlace-ficha" href="${urlFichaTop}" target="_blank" rel="noopener noreferrer">Ficha en eldoblaje.com ↗</a>
+    </div>` : '';
 
   const dialogoHtml = lista.dialogo ? `
     <div class="aviso-dialogo">
@@ -941,6 +1071,7 @@ function pintar(lista) {
           ${top.num_trabajos ? `<div class="dato">${top.num_trabajos.toLocaleString('es-ES')} DOBLAJES</div>` : ''}
         </div>
       </div>
+      ${verificacionHtml}
       <div class="medidor">
         <div class="rotulo"><span>COINCIDENCIA</span><b>${pct}%</b></div>
         <div class="leds">${Array.from({ length: 20 }, (_, i) =>
@@ -963,7 +1094,11 @@ function pintar(lista) {
     </article>
     ${otros.length ? `<article class="ficha" style="animation-delay:.12s">
       <div class="rotulo"><span>${estadoId === 'desconocido' ? 'OTRAS VOCES CERCANAS (BAJA FIABILIDAD)' : 'TAMBIÉN PODRÍA SER'}</span></div>
-      ${otros.map(o => `<div class="otro">${foto(o, true)}<span class="n">${esc(o.nombre)}</span><span class="pct">${aPorcentajeCalibrado(o.parecido)}%</span></div>`).join('')}
+      ${otros.map(o => {
+        const idNumO = String(o.id).split('-')[0];
+        const tieneId = /^\d+$/.test(idNumO);
+        return `<div class="otro">${foto(o, true)}<span class="n">${esc(o.nombre)}</span><span class="pct">${aPorcentajeCalibrado(o.parecido)}%</span>${tieneId ? `<a class="enlace-ficha" href="https://www.eldoblaje.com/datos/FichaActorDoblaje.asp?id=${idNumO}" target="_blank" rel="noopener noreferrer" style="font-size:11px; margin-left:4px" title="Ver ficha">↗</a>` : ''}</div>`;
+      }).join('')}
     </article>` : ''}`;
   res.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
