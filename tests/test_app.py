@@ -84,3 +84,35 @@ def test_app_identificar_audio_valido(cliente):
     assert "slug" in primer_candidato
     assert "parecido" in primer_candidato
     assert "nombre" in primer_candidato
+
+
+def test_app_buscar_sugerencias(cliente):
+    """Verifica el buscador contextual de obras, personajes y actores ('¿Qué estás viendo?')."""
+    res = cliente.get("/api/buscar?q=Toy+Story")
+    assert res.status_code == 200
+    sugerencias = res.json()
+    assert isinstance(sugerencias, list)
+    assert len(sugerencias) > 0
+    primera = sugerencias[0]
+    assert "tipo" in primera
+    assert "texto" in primera
+    assert "num_voces" in primera
+    assert "toy story" in primera["texto"].lower()
+
+
+def test_app_identificar_con_pista_contextual(cliente):
+    """Verifica que la pista contextual restringe el espacio de búsqueda y activa con_contexto."""
+    wav_valido = _crear_wav_en_memoria(duracion_seg=6.0, f0=150.0)
+    res = cliente.post(
+        "/api/identificar?pista=Toy+Story",
+        files={"audio": ("prueba_contextual.wav", wav_valido, "audio/wav")},
+    )
+    assert res.status_code == 200
+    datos = res.json()
+    assert datos["estado"] in ("identificado", "dudoso", "desconocido")
+    assert "contexto" in datos
+    ctx = datos["contexto"]
+    assert ctx["pista"] == "Toy Story"
+    assert "num_candidatos" in ctx
+    assert ctx["num_candidatos"] < 836
+    assert len(datos["resultados"]) > 0
