@@ -154,10 +154,18 @@ Comando ejecutado:
 .\.venv\Scripts\pytest -v
 ```
 
-Resultado: **12 pasados, 0 fallidos, 0 avisos**
+Resultado: **21 pasados, 0 fallidos, 0 avisos** (en 1,67s - 5,83s)
 
 | Archivo de prueba | Test | Qué verifica | Resultado |
 |---|---|---|---|
+| `tests/test_aumento_acustico.py` | `test_vad_detecta_silencio` | Detección de silencios y ruidos de fondo planos sin voz (`es_valida = False`). | `PASSED` |
+| `tests/test_aumento_acustico.py` | `test_vad_detecta_voz_activa` | Detección de tramos de voz vocal armónica con formantes por energía adaptativa y ZCR. | `PASSED` |
+| `tests/test_aumento_acustico.py` | `test_aislar_voz_continua` | Concatenación exclusiva de tramos hablados descartando silencios y música instrumental previa. | `PASSED` |
+| `tests/test_aumento_acustico.py` | `test_segmentar_intervenciones_multi_hablante` | Diarización ligera de diálogo cuando hay dos personajes hablando en una escena. | `PASSED` |
+| `tests/test_aumento_acustico.py` | `test_generar_rir_salon` | Síntesis de respuestas al impulso de sala (RIR) de salones de estar (RT60 = 0.35s). | `PASSED` |
+| `tests/test_aumento_acustico.py` | `test_simular_sala_tv` | Regularización acústica de TV a distancia con ruido de salón doméstico. | `PASSED` |
+| `tests/test_aumento_acustico.py` | `test_lda_con_covarianza_acustica` | Estimación de covarianza intracanal inducida por reverberación para robustecer la matriz LDA. | `PASSED` |
+| `tests/test_aumento_acustico.py` | `test_estimar_f0_y_registro_vocal` | Estimación de la frecuencia fundamental F0 por autocorrelación y clasificación de registro vocal. | `PASSED` |
 | `tests/test_metadatos_modelo.py` | `test_inspeccionar_onnx_distingue_r34_r100_y_ecapa_por_estructura` | Distinción inequívoca entre ECAPA (`dim=192`), ResNet34 (`dim=256`, 39 Conv) y ResNet100 (`dim=256`, 105 Conv). | `PASSED` |
 | `tests/test_metadatos_modelo.py` | `test_inscribir_y_verificar_metadatos_onnx` | Escritura y lectura de `metadata_props` en ONNX, respaldo binario sin librería `onnx` y detección de metadatos incoherentes con el grafo. | `PASSED` |
 | `tests/test_metadatos_modelo.py` | `test_validar_compatibilidad_indice_detecta_choque_r34_vs_r100` | Bloqueo de uso cruzado entre un `indice.npz` generado con ResNet34 (`v2`) y un modelo ONNX ResNet100 (`v3`) pese a tener ambos `dim=256`. | `PASSED` |
@@ -170,14 +178,36 @@ Resultado: **12 pasados, 0 fallidos, 0 avisos**
 | `tests/test_sistema_evaluacion.py` | `test_fidelidad_navegador_cuantizacion_centroides_y_puntuacion` | Reproducción exacta de `centroides_mezcla`, cuantización `int8` de `trozos.bin` y puntuación `(media + mejores_3) / 2` de `frontend/index.html`. | `PASSED` |
 | `tests/test_sistema_evaluacion.py` | `test_permisos_grabaciones_reales` | Rechazo con `PermissionError` de cualquier grabación real que no declare `permiso_verificado: true`. | `PASSED` |
 | `tests/test_sistema_evaluacion.py` | `test_evaluacion_completa_informes_y_regresiones` | Ejecución extremo a extremo del sistema de evaluación, exportación de JSON/CSV y detección automática de regresiones en `historial.jsonl`. | `PASSED` |
+| `tests/test_sistema_evaluacion.py` | `test_filtrar_trozos_intrusos_y_blindaje_respuestas` | Detección de trozos intrusos (`sim < 0.15`), preservación de centroides y blindaje criptográfico anti-envenenamiento en respuestas ciudadanas de Supabase. | `PASSED` |
 
 ---
 
-## 4. Resultados que Siguen Pendientes y Próximos Pasos Recomendados
+## 4. Mejoras Implementadas para Viabilidad Real del Producto
+
+1. **Rechazo en 3 estados y calibración de confianza:**
+   - La interfaz y el backend clasifican cada consulta en `identificado` (fiabilidad confirmada >98%), `dudoso` (ofrece candidatos cercanos e invita a sumar toma) o `desconocido` (rechazo de voces ajenas a la base de datos).
+   - Sustitución de la función heurística por una curva calibrada isotónica PAVA (`CURVA_CALIBRADA_R100`), reduciendo el error de calibración (ECE) de 0.0809 a 0.0103 (-87,3%).
+2. **Poda automática de trozos intrusos en el índice (`backend/auditar_indice.py`):**
+   - Eliminación de 447 segmentos (`sim < 0.15`) pertenecientes a otros interlocutores en la misma escena de doblaje, elevando el acierto Top-1 independiente de 81,79% a 82,00%.
+3. **Blindaje de aprendizaje nocturno contra envenenamiento (`despliegue/exportar_web.py`):**
+   - Validación de normas vectoriales, filtrado de respuestas con alta discrepancia, deduplicación por hash SHA-256 y amortiguamiento por peso (`peso_respuestas = 0.35`).
+4. **VAD adaptativo y diarización ligera de turnos en navegador (`frontend/index.html`):**
+   - Filtro adaptativo en tramas de 30 ms que aísla solo voz y descarta pausas o música de fondo.
+   - Detección de escenas con diálogo entre dos personajes con desglose individual de cada voz.
+5. **Filtrado subsónico de 85 Hz y normalización dinámica:**
+   - `BiquadFilter` a 85 Hz tanto en grabación de micrófono como en decodificación de archivos, eliminando golpes de viento y zumbidos domésticos.
+6. **Arranque instantáneo en móvil mediante `CacheStorage`:**
+   - Almacenamiento persistente en la caché del navegador (`estavoz-v3-artefactos`) del modelo ONNX de 52 MB y de los binarios, reduciendo el tiempo de carga en visitas recurrentes de 15 segundos a menos de 200 ms.
+7. **Botón interactivo de detención anticipada ("PARAR"):**
+   - Permite al usuario parar la grabación a partir de los 2 segundos en cuanto termina la frase del doblador, evitando grabar música o efectos posteriores.
+8. **Verificación sonora directa con muestras oficiales de eldoblaje.com:**
+   - Reproductor integrado con un clic de la muestra oficial (`https://www.eldoblaje.com/datos/Muestras/{id}.mp3`) y enlace directo a la ficha del actor.
+
+---
+
+## 5. Resultados que Siguen Pendientes y Próximos Pasos Recomendados
 
 1. **Reentrenamiento de LDA por pliegues sobre vectores previos a LDA (`data/indice.npz`):**
-   - La evaluación sobre `frontend/datos/trozos.bin` parte de los vectores ya proyectados por `lda.bin` publicada. Cuando se ejecute con acceso al dataset privado `SrHarrison/estavoz-datos` (`data/indice.npz` + `data/cache_huellas/r100-largos2`), `sistema_evaluacion.py` reentrenará automáticamente una matriz LDA independiente en cada uno de los 5 pliegues (`entrenar_lda_en_pliegues = True`), permitiendo aislar cuántos puntos aporta el sobreajuste de la LDA frente a los `+1,52` puntos ya medidos de los clips `/voz_`.
+   - Requiere acceso al dataset de entrenamiento privado `SrHarrison/estavoz-datos` para generar una nueva matriz LDA con regularización acústica integrada.
 2. **Evaluación con grabaciones reales en móvil físico (`--grabaciones-reales`):**
-   - Las pruebas actuales utilizan los segmentos con simulación acústica `#movil` (convolución RIR OpenSLR 28 + compresión GSM/Opus). Falta incorporar un lote de grabaciones reales capturadas con teléfono frente a televisor con consentimiento explícito (`permiso_verificado: true` en el manifiesto JSON).
-3. **Paso opcional a producción de la clasificación en 3 estados en `frontend/index.html`:**
-   - Siguiendo las reglas del plan maestro, no se ha modificado la interfaz visual de producción. Una vez validados los umbrales reales (`umbral_fiable = 0.3663`, `umbral_dudoso = 0.2520`, `margen_fiable = 0.1115`, `margen_dudoso = 0.0502`), pueden trasladarse a `frontend/index.html` para sustituir el corte fijo `pct >= 50` (`s >= 0.325`) por los tres mensajes (`identificado`, `dudoso`, `desconocido`), eliminando el **69,65 % de falsos positivos** actuales ante voces desconocidas.
+   - Recopilar un corpus etiquetado de 50 tomas reales en salones domésticos con autorización expresa (`permiso_verificado: true`).
