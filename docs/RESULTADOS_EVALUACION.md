@@ -154,10 +154,14 @@ Comando ejecutado:
 .\.venv\Scripts\pytest -v
 ```
 
-Resultado: **21 pasados, 0 fallidos, 0 avisos** (en 1,67s - 5,83s)
+Resultado: **25 pasados, 0 fallidos, 0 avisos** (en 4,34s - 6,02s)
 
 | Archivo de prueba | Test | Qué verifica | Resultado |
 |---|---|---|---|
+| `tests/test_app.py` | `test_app_salud` | Endpoint de salud, integridad del modelo ONNX ResNet100 (105 Conv), 836 actores y hash SHA-256 de LDA. | `PASSED` |
+| `tests/test_app.py` | `test_app_sirve_frontend_estatico` | Servido estático correcto del cliente web `frontend/` y `index.html`. | `PASSED` |
+| `tests/test_app.py` | `test_app_identificar_rechaza_audio_demasiado_corto` | Validación de longitud mínima (<2s) devolviendo HTTP 400 controlado. | `PASSED` |
+| `tests/test_app.py` | `test_app_identificar_audio_valido` | Inferencia completa extremo a extremo con el modelo ONNX, ranking y decisión en 3 estados. | `PASSED` |
 | `tests/test_aumento_acustico.py` | `test_vad_detecta_silencio` | Detección de silencios y ruidos de fondo planos sin voz (`es_valida = False`). | `PASSED` |
 | `tests/test_aumento_acustico.py` | `test_vad_detecta_voz_activa` | Detección de tramos de voz vocal armónica con formantes por energía adaptativa y ZCR. | `PASSED` |
 | `tests/test_aumento_acustico.py` | `test_aislar_voz_continua` | Concatenación exclusiva de tramos hablados descartando silencios y música instrumental previa. | `PASSED` |
