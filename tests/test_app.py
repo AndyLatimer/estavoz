@@ -33,7 +33,7 @@ def _crear_wav_en_memoria(duracion_seg: float = 4.0, sr: int = 16000, f0: float 
 
 
 def test_app_salud(cliente):
-    """Verifica el endpoint de salud y la carga íntegra de los 836 actores."""
+    """Verifica el endpoint de salud y la carga íntegra de los actores."""
     res = cliente.get("/api/salud")
     assert res.status_code == 200
     datos = res.json()
@@ -41,7 +41,7 @@ def test_app_salud(cliente):
     assert datos["modo_indice"] in ("web", "npz")
     info = datos["info_modelo"]
     assert info["dim"] == 256
-    assert info["num_actores"] == 836
+    assert info["num_actores"] >= 836
     assert info["version_modelo"] == "3"
     assert info["variante_modelo"] == "r100"
 
@@ -114,5 +114,30 @@ def test_app_identificar_con_pista_contextual(cliente):
     ctx = datos["contexto"]
     assert ctx["pista"] == "Toy Story"
     assert "num_candidatos" in ctx
-    assert ctx["num_candidatos"] < 836
+    assert 0 < ctx["num_candidatos"] < 200
     assert len(datos["resultados"]) > 0
+    assert "porcentaje" in datos["resultados"][0]
+
+
+def test_app_detalle_actor_y_filmografia_filtrable(cliente):
+    """Verifica `/api/actor/{actor_id}` para explorar en qué más sale un doblador (pelis, series, juegos...)."""
+    res_buscar = cliente.get("/api/buscar?q=Toy+Story")
+    assert res_buscar.status_code == 200
+    ident = cliente.post(
+        "/api/identificar",
+        files={"audio": ("actor.wav", _crear_wav_en_memoria(duracion_seg=4.0, f0=140.0), "audio/wav")},
+    )
+    assert ident.status_code == 200
+    slug = ident.json()["resultados"][0]["slug"]
+
+    res_actor = cliente.get(f"/api/actor/{slug}?limite=20")
+    assert res_actor.status_code == 200
+    det = res_actor.json()
+    assert det["id"] == slug
+    assert "filmografia" in det
+    assert "total" in det["filmografia"]
+    assert "conteo_tipos" in det["filmografia"]
+    assert isinstance(det["filmografia"]["items"], list)
+
+    res_404 = cliente.get("/api/actor/000000-actor-inexistente")
+    assert res_404.status_code == 404

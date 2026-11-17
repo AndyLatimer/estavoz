@@ -1,4 +1,6 @@
 """Huellas de voz: convierte audio en un vector que resume cómo suena la voz."""
+import io
+from math import gcd
 import os
 import subprocess
 import tempfile
@@ -6,6 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
+from scipy.signal import resample_poly
 import soundfile as sf
 
 try:
@@ -55,6 +58,27 @@ def modelo():
     )
 
 
+def _a_mono_16k(audio: np.ndarray, sr_origen: int, max_seg: int | None = None) -> np.ndarray:
+    """Convierte a mono float32 a 16 kHz con remuestreo polifásico antialiasing."""
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+    audio = np.asarray(audio, dtype=np.float32)
+    if max_seg:
+        audio = audio[: int(max_seg * sr_origen)]
+    if sr_origen != SAMPLE_RATE and len(audio) > 0:
+        g = gcd(int(sr_origen), SAMPLE_RATE)
+        audio = resample_poly(audio, SAMPLE_RATE // g, int(sr_origen) // g).astype(np.float32)
+    if max_seg:
+        audio = audio[: int(max_seg * SAMPLE_RATE)]
+    return audio
+
+
+def cargar_audio_bytes(datos: bytes, max_seg: int | None = None) -> np.ndarray:
+    """Decodifica bytes de audio (MP3, WAV, FLAC, OGG...) directamente a 16 kHz mono float32."""
+    audio, sr_origen = sf.read(io.BytesIO(datos), dtype="float32")
+    return _a_mono_16k(audio, sr_origen, max_seg=max_seg)
+
+
 def cargar_audio(ruta: str | Path, separar: bool = False, max_seg: int | None = None) -> np.ndarray:
     """Cualquier formato (mp3, webm del móvil, wav...) -> 16 kHz mono float32.
 
@@ -64,22 +88,11 @@ def cargar_audio(ruta: str | Path, separar: bool = False, max_seg: int | None = 
     canales, frecuencia = ("2", "44100") if separar else ("1", str(SAMPLE_RATE))
     limite = ["-t", str(max_seg)] if max_seg else []
 
-    # 1. Intentar decodificación directa con soundfile (WAV, FLAC, OGG...) sin requerir ffmpeg externo
+    # 1. Intentar decodificación directa con soundfile (WAV, FLAC, OGG, MP3...) sin requerir ffmpeg externo
     if not separar:
         try:
             audio, sr_origen = sf.read(str(ruta), dtype="float32")
-            if audio.ndim > 1:
-                audio = audio.mean(axis=1)
-            if sr_origen != SAMPLE_RATE:
-                n_salida = int(round(len(audio) * SAMPLE_RATE / sr_origen))
-                audio = np.interp(
-                    np.linspace(0, len(audio), n_salida, endpoint=False),
-                    np.arange(len(audio)),
-                    audio,
-                ).astype(np.float32)
-            if max_seg:
-                audio = audio[: int(max_seg * SAMPLE_RATE)]
-            return audio
+            return _a_mono_16k(audio, sr_origen, max_seg=max_seg)
         except Exception:
             pass
 

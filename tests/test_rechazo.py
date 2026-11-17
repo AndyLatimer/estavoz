@@ -35,11 +35,11 @@ def test_porcentaje_interfaz_actual_reproduce_js():
     assert porcentaje_interfaz_actual(0.65) == 100
 
     assert porcentaje_calibrado_r100(0.10) == 0
-    assert porcentaje_calibrado_r100(0.15) == 0
-    assert porcentaje_calibrado_r100(0.33) == 33
-    assert porcentaje_calibrado_r100(0.37) == 47
-    assert porcentaje_calibrado_r100(0.48) == 86
-    assert porcentaje_calibrado_r100(0.60) == 100
+    assert porcentaje_calibrado_r100(0.25) == 0
+    assert porcentaje_calibrado_r100(0.42) == 21
+    assert porcentaje_calibrado_r100(0.52) == 46
+    assert porcentaje_calibrado_r100(0.66) == 86
+    assert porcentaje_calibrado_r100(0.85) == 100
     assert len(CURVA_CALIBRADA_R100) == 9
 
 

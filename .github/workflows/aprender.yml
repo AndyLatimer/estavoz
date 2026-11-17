@@ -28,8 +28,8 @@ jobs:
           python-version: "3.12"
 
       - name: Instalar dependencias
-        # solo combina huellas ya calculadas con las respuestas: no hace falta el modelo de audio
-        run: pip install numpy scipy requests huggingface_hub
+        # solo combina huellas ya calculadas con las respuestas e incorpora fuentes curadas vía ONNX
+        run: pip install numpy scipy requests huggingface_hub onnxruntime soundfile
 
       - name: Bajar datos (copia privada) y modelo
         env:
@@ -44,9 +44,11 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python backend/aprender.py
 
-      - name: Rehacer los datos de la web y publicar
+      - name: Rehacer los datos de la web, incorporar fuentes curadas y publicar
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          ESTAVOZ_ONNX: frontend/modelo/voxblink-int8.onnx
         run: |
           python despliegue/exportar_web.py
+          python backend/incorporar_voces.py --curados
           python despliegue/subir_a_huggingface.py "${{ vars.HF_SPACE }}"

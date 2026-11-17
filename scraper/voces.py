@@ -122,7 +122,8 @@ class Reconocedor:
         import onnxruntime as ort
         opciones = ort.SessionOptions()
         opciones.intra_op_num_threads = hilos
-        self.ecapa = ort.InferenceSession(str(RAIZ / "modelos" / "ecapa-int8.onnx"), opciones)
+        ecapa_ruta = RAIZ / "modelos" / "ecapa-int8.onnx"
+        self.ecapa = ort.InferenceSession(str(ecapa_ruta), opciones) if ecapa_ruta.exists() else None
         self.r100 = ort.InferenceSession(str(RAIZ / "frontend" / "modelo" / "voxblink-int8.onnx"), opciones)
         datos = RAIZ / "frontend" / "datos"
         meta = json.loads((datos / "actores.json").read_text(encoding="utf-8"))
@@ -145,10 +146,16 @@ class Reconocedor:
         return v / np.linalg.norm(v)
 
     def huella_ecapa(self, audio):
+        if self.ecapa is None:
+            return self.proyectar(self.huella_r100(audio)[None])[0]
         return self._huella(self.ecapa, audio)
 
     def huella_r100(self, audio):
         return self._huella(self.r100, audio)
+
+    def proyectar(self, huellas):
+        q = (huellas - self.mu) @ self.W
+        return q / np.maximum(np.linalg.norm(q, axis=1, keepdims=True), 1e-12)
 
     def puntuar(self, huellas):
         q = (huellas - self.mu) @ self.W
@@ -179,33 +186,35 @@ def segundos_nuevos(slug: str) -> float:
     return sum(sf.info(str(f)).duration for f in (ACTORES / slug / "clips").glob("voz_*.flac"))
 
 
-def bajar_trozos(ep):
-    """Primeros minutos de un episodio en trozos de 6 s, sin silencios. Devuelve (clave, trozos) o un error."""
-    from voz import SAMPLE_RATE, cargar_audio
+def bajar_trozos(ep, skip_seg: int = 0, max_bytes: int = MAX_BYTES):
+    """Turnos puros de habla de un episodio, sin música ni silencios. Devuelve (clave, trozos) o un error."""
+    from aumento_acustico import DetectorVoz, segmentar_intervenciones
+    from voz import SAMPLE_RATE, cargar_audio, cargar_audio_bytes
     clave = hashlib.sha1(ep["mp3"].encode()).hexdigest()[:12]
     tmp = DIR / "tmp" / f"{clave}.mp3"
-    tmp.parent.mkdir(parents=True, exist_ok=True)
     try:
-        with sesion.get(ep["mp3"], timeout=60, stream=True, headers={"Range": f"bytes=0-{MAX_BYTES}"}) as r:
+        with sesion.get(ep["mp3"], timeout=60, stream=True, headers={"Range": f"bytes=0-{max_bytes}"}) as r:
             r.raise_for_status()
-            leido = 0
-            with open(tmp, "wb") as f:
-                for trozo in r.iter_content(1 << 16):
-                    f.write(trozo)
-                    leido += len(trozo)
-                    if leido >= MAX_BYTES:
-                        break
-        audio = cargar_audio(tmp, max_seg=MINUTOS * 60)
+            buf = bytearray()
+            for trozo in r.iter_content(1 << 16):
+                buf.extend(trozo)
+                if len(buf) >= max_bytes:
+                    break
+        try:
+            audio = cargar_audio_bytes(bytes(buf), max_seg=MINUTOS * 60 + skip_seg)
+        except Exception:
+            tmp.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_bytes(bytes(buf))
+            audio = cargar_audio(tmp, max_seg=MINUTOS * 60 + skip_seg)
     except Exception as e:
         return clave, str(e)[:200]
     finally:
         tmp.unlink(missing_ok=True)
-    paso = 6 * SAMPLE_RATE
-    trozos = [audio[i:i + paso] for i in range(0, len(audio) - paso + 1, paso)]
-    # fuera silencios y casi silencios
-    energia = np.array([np.sqrt(np.mean(t ** 2)) for t in trozos]) if trozos else np.zeros(0)
-    validos = np.flatnonzero(energia > max(1e-3, 0.25 * np.median(energia))) if len(energia) else []
-    return clave, [trozos[i] for i in validos]
+    if skip_seg and len(audio) > (skip_seg + 30) * SAMPLE_RATE:
+        audio = audio[skip_seg * SAMPLE_RATE:]
+    vad = DetectorVoz(sr=SAMPLE_RATE, min_voz_util_seg=1.5).analizar(audio)
+    turnos = segmentar_intervenciones(audio, vad=vad, sr=SAMPLE_RATE, min_duracion_turno_seg=3.0, max_duracion_turno_seg=7.0)
+    return clave, [t for t in turnos if len(t) >= 3 * SAMPLE_RATE]
 
 
 def procesar_episodio(rec, slug, ep, nombres_planos, ficha_nombres):
@@ -456,6 +465,11 @@ FEEDS = {
     "CharletaCast": "https://anchor.fm/s/10f89d5cc/podcast/rss",
     "Contando con Ellas": "https://anchor.fm/s/ff5d1560/podcast/rss",
     "La Hora Pokémon": "https://feeds.ivoox.com/feed_fg_f1728172_filtro_1.xml",
+    "La Vermella": "https://dinamics.3cat.cat/public/podcast/catradio/xml/9/9/podprograma1999.xml",
+    "SOY TU FAN": "https://feeds.ivoox.com/feed_fg_f11104200_filtro_1.xml",
+    "Estamos Dobladas": "https://anchor.fm/s/ff1e06cc/podcast/rss",
+    "Noches del Doblaje con Tebo Kyon": "https://feeds.feedburner.com/EntrevistasRadioAnimeObsesion",
+    "Las voces del doblaje indiscreto": "https://anchor.fm/s/f3b7cc64/podcast/rss",
 }
 PROGRAMAS = DIR / "programas"
 

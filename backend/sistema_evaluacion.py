@@ -42,6 +42,8 @@ from rechazo import (  # noqa: E402
     EstadoIdentificacion,
     MuestraValidacionRechazo,
     UmbralesRechazo,
+    aplicar_as_norm,
+    calcular_estadisticas_cohorte,
     calibrar_umbrales,
     clasificar_consulta,
     evaluar_calibracion_porcentajes,
@@ -214,6 +216,10 @@ class ConfigEvaluacion:
     dims_lda: int | None = None
     peso_entrevistas: float = 0.5
     peso_centroide: float = 0.5
+    top_k_trozos: int = 3
+    as_norm_peso: float = 0.0
+    as_norm_k: int = 50
+    umbral_poda_intrusos: float = 0.0
     cuantizar_trozos_int8: bool = True
     usar_cov_acustica: bool = False
     peso_cov_acustica: float = 0.10
@@ -406,7 +412,7 @@ def ejecutar_evaluacion_completa(
     ini_actor = np.searchsorted(fa_ref, np.arange(n_gal))
     fin_actor = np.searchsorted(fa_ref, np.arange(n_gal), side="right")
     max_t = int(np.max(fin_actor - ini_actor)) if n_gal > 0 else 1
-    k_top = min(3, max_t)
+    k_top = min(max(1, cfg.top_k_trozos), max_t)
     # Matriz (n_gal, max_t) con los índices de trozos de cada actor (el resto apunta al centinela -inf)
     matriz_idx_actor = np.full((n_gal, max_t), len(X_ref), dtype=np.int32)
     for i in range(n_gal):
@@ -430,10 +436,9 @@ def ejecutar_evaluacion_completa(
             filas_contaminadas_actor[a] = rango[es_cont[rango]]
 
     # Pre-proyectar la galería y los centroides base por cada pliegue (para actualizar solo el actor consultado)
-    galeria_por_pliegue: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    galeria_por_pliegue: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = {}
     for p, (mu, W) in modelos_lda.items():
         V_proy = proyectar(X_ref, mu, W)
-        V_quant = cuantizar_descuantizar_int8(V_proy) if cfg.cuantizar_trozos_int8 else V_proy
         C_base = centroides_mezcla_web(
             V_proy,
             y_ref,
@@ -441,7 +446,22 @@ def ejecutar_evaluacion_completa(
             actores_galeria,
             peso_entrevistas=cfg.peso_entrevistas,
         )
-        galeria_por_pliegue[p] = (V_proy, V_quant, C_base)
+        conservar = np.ones(len(V_proy), dtype=bool)
+        if cfg.umbral_poda_intrusos > 0:
+            from auditar_indice import filtrar_trozos_intrusos
+            conservar, _ = filtrar_trozos_intrusos(
+                V_proy, y_ref, C_base, actores_galeria, umbral_outlier=cfg.umbral_poda_intrusos
+            )
+            C_base = centroides_mezcla_web(
+                V_proy[conservar],
+                y_ref[conservar],
+                clip_ref[conservar],
+                actores_galeria,
+                peso_entrevistas=cfg.peso_entrevistas,
+            )
+        V_quant = cuantizar_descuantizar_int8(V_proy) if cfg.cuantizar_trozos_int8 else V_proy
+        mu_a_p, sd_a_p = calcular_estadisticas_cohorte(C_base, k=cfg.as_norm_k)
+        galeria_por_pliegue[p] = (V_proy, V_quant, C_base, np.flatnonzero(~conservar), mu_a_p, sd_a_p)
 
     resultados_detalle: list[dict[str, Any]] = []
     muestras_rechazo_abierto: list[MuestraValidacionRechazo] = []
@@ -453,9 +473,11 @@ def ejecutar_evaluacion_completa(
         es_conocido = (q.actor_real is not None) and (q.actor_real in idx_galeria)
         p_fold = pliegue_actor.get(q.actor_real or "", 0)
         mu, W = modelos_lda[p_fold]
-        V_proy_all, V_quant_all, C_base_fold = galeria_por_pliegue[p_fold]
+        V_proy_all, V_quant_all, C_base_fold, excl_poda, mu_a_fold, sd_a_fold = galeria_por_pliegue[p_fold]
 
         excl = filas_por_grupo.get(q.grupo_grabacion, np.zeros(0, dtype=int))
+        if len(excl_poda):
+            excl = np.union1d(excl, excl_poda)
         if cfg.solo_galeria_independiente and q.fuente == "eldoblaje" and q.actor_real in filas_contaminadas_actor:
             excl = np.union1d(excl, filas_contaminadas_actor[q.actor_real])
 
@@ -490,6 +512,10 @@ def ejecutar_evaluacion_completa(
         suma_f = np.where(finitos, top_k_vals, 0.0).sum(axis=1)
         mejores = np.where(cuenta_f > 0, suma_f / np.maximum(cuenta_f, 1), media_cent)
         punt_abierto = (cfg.peso_centroide * media_cent + (1.0 - cfg.peso_centroide) * mejores).astype(np.float32)
+        if cfg.as_norm_peso > 0:
+            punt_abierto = aplicar_as_norm(
+                punt_abierto, mu_a=mu_a_fold, sd_a=sd_a_fold, k=cfg.as_norm_k, peso=cfg.as_norm_peso
+            )
 
         orden_ab = np.argsort(-punt_abierto)
         top1_ab = actores_galeria[int(orden_ab[0])]
@@ -1086,6 +1112,9 @@ def main() -> None:
     p.add_argument("--sintetico", action="store_true", help="Ejecutar verificación con datos sintéticos controlados")
     p.add_argument("--solo-galeria-independiente", action="store_true")
     p.add_argument("--usar-cov-acustica", action="store_true", help="Inyecta covarianza de canal acústico en Sw de LDA")
+    p.add_argument("--top-k", type=int, default=4, help="Número de mejores trozos promediados")
+    p.add_argument("--as-norm-peso", type=float, default=0.04, help="Peso del ajuste AS-Norm contra actores imán")
+    p.add_argument("--umbral-poda", type=float, default=0.0, help="Poda adicional de trozos intrusos")
     p.add_argument("--salida", type=Path, default=RAIZ / "data" / "evaluaciones" / "ultima")
     p.add_argument("--historial", type=Path, default=RAIZ / "data" / "evaluaciones" / "historial.jsonl")
     args = p.parse_args()
@@ -1116,6 +1145,9 @@ def main() -> None:
         entrenar_lda_en_pliegues=entrenar_lda,
         solo_galeria_independiente=args.solo_galeria_independiente,
         usar_cov_acustica=args.usar_cov_acustica,
+        top_k_trozos=args.top_k,
+        as_norm_peso=args.as_norm_peso,
+        umbral_poda_intrusos=args.umbral_poda,
     )
     informe = ejecutar_evaluacion_completa(refs, cons, config=cfg, repartos_contexto=repartos)
     rutas = exportar_informe_json_csv(informe, args.salida)

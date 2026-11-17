@@ -16,9 +16,7 @@ El índice tiene que estar hecho con ESTAVOZ_ONNX=frontend/modelo/voxblink-int8.
 """
 import hashlib
 import json
-import re
 import shutil
-import unicodedata
 import sys
 from pathlib import Path
 
@@ -27,6 +25,14 @@ import numpy as np
 RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ / "backend"))
 from auditar_indice import filtrar_trozos_intrusos  # noqa: E402
+from filmografia import (  # noqa: E402
+    _PERSONAJES_GENERICOS,
+    nombre_original,
+    personaje_base,
+    resumen_actor_desde_papeles,
+    titulo_base,
+    titulo_bonito,
+)
 from lda import entrenar_lda, proyectar  # noqa: E402
 from metadatos_modelo import (  # noqa: E402
     VERSION_LDA_ACTUAL,
@@ -36,37 +42,6 @@ from metadatos_modelo import (  # noqa: E402
     validar_compatibilidad_indice,
 )
 from rechazo import UMBRALES_VOXBLINK_R100_CALIBRADOS  # noqa: E402
-
-
-def titulo_base(t: str) -> str:
-    """'LA JAULA [1ª temporada]' y 'LA JAULA (1x05)' -> 'LA JAULA' (las temporadas cuentan como una obra)."""
-    t = re.sub(r"\[[^\]]*\]|\(\d+x\d+\)", "", t)
-    return re.sub(r"\s+", " ", t).strip(" :-")
-
-
-def personaje_base(p: str) -> str:
-    """'Buzz Lightyear (voz)' / 'Sofiane (1x05)' -> 'Buzz Lightyear'."""
-    p = re.sub(r"\([^)]*\)|\[[^\]]*\]", "", p)
-    return re.sub(r"\s+", " ", p).strip(" .,:-")
-
-
-MINUSCULAS = set("de del la las el los lo un una unos unas y e o u en a al con por para sin su sus".split())
-
-
-def titulo_bonito(t: str) -> str:
-    """'TOY STORY 2: LOS JUGUETES VUELVEN A LA CARGA' -> 'Toy Story 2: los Juguetes Vuelven a la Carga'."""
-    if not t.isupper():
-        return t
-    palabras = t.lower().split(" ")
-    return " ".join(w if (k and w in MINUSCULAS) else w[:1].upper() + w[1:] for k, w in enumerate(palabras))
-
-
-def nombre_original(a: str) -> str:
-    """'Bale, Christian' -> 'Christian Bale'."""
-    if a.count(",") == 1:
-        apellidos, nombre = (x.strip() for x in a.split(","))
-        a = f"{nombre} {apellidos}"
-    return a.title() if a.isupper() else a
 
 
 def entradas_busqueda(slugs):
@@ -85,9 +60,10 @@ def entradas_busqueda(slugs):
         for t in json.loads(f.read_text(encoding="utf-8")):
             if (o := titulo_base(t["obra"])):
                 obras[o].add(i)
-            if (p := personaje_base(t["personaje"])) and len(p) >= 3:
-                personajes[p.title() if p.isupper() else p].add(i)
-                veces_p[p.title() if p.isupper() else p] += 1
+            if (p := personaje_base(t["personaje"])) and len(p) >= 3 and p.lower() not in _PERSONAJES_GENERICOS:
+                pk = p.title() if p.isupper() else p
+                personajes[pk].add(i)
+                veces_p[pk] += 1
             if (a := nombre_original(t["actor_original"].strip())):
                 originales[a].add(i)
                 veces_o[a] += 1
@@ -117,7 +93,7 @@ def respuestas_validas(mu, W, C, slugs, ruta_respuestas=None):
     if not f.exists():
         return [], []
     pos = {s: i for i, s in enumerate(slugs)}
-    umbral_min = max(0.25, float(UMBRALES_VOXBLINK_R100_CALIBRADOS.umbral_dudoso))
+    umbral_min = 0.252  # coseno bruto medio mínimo sobre centroides sin AS-Norm
     hashes_vistos: set[str] = set()
     X, y = [], []
     for r in json.loads(f.read_text(encoding="utf-8")):
@@ -203,12 +179,12 @@ def main():
         C = centroides_mezcla(proyectar(Xt, mu, W), yt, clips_t, slugs)
         print(f"Respuestas de usuarios usadas: {len(yr)} huellas de {len(set(yr))} actores")
 
-    # Poda automática de trozos intrusos (interlocutores secundarios o música pura con sim < 0.15)
-    conservar, intrusos = filtrar_trozos_intrusos(proyectar(Xt, mu, W), yt, C, slugs, umbral_outlier=0.15)
+    # Poda automática de trozos intrusos (interlocutores secundarios o música pura con sim < 0.20)
+    conservar, intrusos = filtrar_trozos_intrusos(proyectar(Xt, mu, W), yt, C, slugs, umbral_outlier=0.20)
     if intrusos:
         Xt, yt, clips_t = Xt[conservar], yt[conservar], clips_t[conservar]
         C = centroides_mezcla(proyectar(Xt, mu, W), yt, clips_t, slugs)
-        print(f"Trozos intrusos filtrados: {len(intrusos)} segmentos con sim < 0.15 al centroide del actor")
+        print(f"Trozos intrusos filtrados: {len(intrusos)} segmentos con sim < 0.20 al centroide del actor")
 
     salida = RAIZ / "frontend" / "datos"
     shutil.rmtree(salida, ignore_errors=True)
@@ -224,32 +200,50 @@ def main():
         f.write(escala.astype("<f4").tobytes())
         f.write(np.round(V / escala[:, None]).astype(np.int8).tobytes())
 
+    entradas = entradas_busqueda(slugs)
+    popularidad_obras = {e[1].lower(): len(e[2]) for e in entradas if e[0] == "obra"}
+    (salida / "busqueda.json").write_text(json.dumps(entradas, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+
     fotos = RAIZ / "frontend" / "fotos"
     shutil.rmtree(fotos, ignore_errors=True)
     fotos.mkdir()
+    papeles = salida / "papeles"
+    papeles.mkdir()
     actores = []
     for i, s in enumerate(slugs):
         foto = RAIZ / "data" / "actores" / s / "foto.jpg"
         if foto.exists():
             shutil.copy(foto, fotos / f"{i}.jpg")
-        actores.append({
+        f_trab = RAIZ / "data" / "actores" / s / "trabajos.json"
+        filas = json.loads(f_trab.read_text(encoding="utf-8")) if f_trab.exists() else []
+        (papeles / f"{i}.json").write_text(
+            json.dumps(
+                [[t["obra"], t["personaje"], t["anio"], t["actor_original"]] for t in filas],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            encoding="utf-8",
+        )
+        resumen = resumen_actor_desde_papeles(filas, popularidad_obras=popularidad_obras) if filas else {
+            "trabajos": fichas[s].get("trabajos", []),
+            "num_trabajos": fichas[s].get("num_trabajos", 0),
+            "resumen_tipos": {},
+            "vozh": [],
+        }
+        info_actor = {
             "id": s,
             "nombre": fichas[s]["nombre"],
             "foto": f"fotos/{i}.jpg" if foto.exists() else "",
-            "trabajos": fichas[s].get("trabajos", []),
-            "num_trabajos": len(json.loads(t.read_text(encoding="utf-8"))) if (t := RAIZ / "data" / "actores" / s / "trabajos.json").exists()
-                            else fichas[s].get("num_trabajos", 0),
-        })
-    entradas = entradas_busqueda(slugs)
-    (salida / "busqueda.json").write_text(json.dumps(entradas, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    # trabajos completos de cada doblador (se pide solo el del resultado, para decir el personaje)
-    papeles = salida / "papeles"
-    papeles.mkdir()
-    for i, s in enumerate(slugs):
-        f = RAIZ / "data" / "actores" / s / "trabajos.json"
-        filas = json.loads(f.read_text(encoding="utf-8")) if f.exists() else []
-        (papeles / f"{i}.json").write_text(json.dumps(
-            [[t["obra"], t["personaje"], t["anio"], t["actor_original"]] for t in filas], ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+            "trabajos": resumen["trabajos"] or fichas[s].get("trabajos", []),
+            "num_trabajos": resumen["num_trabajos"] or fichas[s].get("num_trabajos", 0),
+        }
+        if fichas[s].get("muestra"):
+            info_actor["muestra"] = fichas[s]["muestra"]
+        if resumen["resumen_tipos"]:
+            info_actor["resumen_tipos"] = resumen["resumen_tipos"]
+        if resumen["vozh"]:
+            info_actor["vozh"] = resumen["vozh"]
+        actores.append(info_actor)
     web = {
         "dim": int(X.shape[1]),
         "version_modelo": VERSION_MODELO,

@@ -184,9 +184,34 @@
   .enlace-ficha { font: 12px var(--mono); color: var(--gris); text-decoration: underline; text-underline-offset: 3px; }
   .enlace-ficha:hover { color: var(--papel); }
   .otro { display: flex; align-items: center; gap: 14px; padding: 10px 0; border-bottom: 1px dashed var(--linea); }
+  .otro { display: flex; align-items: center; gap: 14px; padding: 10px 0; border-bottom: 1px dashed var(--linea); cursor: pointer; transition: background .12s; }
+  .otro:hover { background: rgba(243,234,216,.03); }
   .otro:last-child { border-bottom: 0; padding-bottom: 0; }
   .otro .n { font-size: 20px; font-weight: 600; }
   .otro .pct { margin-left: auto; font: 600 13px var(--mono); color: var(--gris); }
+  .vozh { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; align-items: center; }
+  .vozh .rot { font: 600 10px var(--mono); letter-spacing: .12em; color: var(--gris); margin-right: 4px; }
+  .vozh button { background: rgba(243,234,216,.06); border: 1px solid var(--linea); color: var(--papel); border-radius: 999px; padding: 3px 9px; font: 11px var(--mono); cursor: pointer; }
+  .vozh button:hover { border-color: var(--ambar); color: var(--ambar); }
+  .badge-tipo { display: inline-block; font: 600 9px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--ambar); border: 1px solid rgba(242,177,52,.35); border-radius: 3px; padding: 1px 5px; margin-right: 6px; vertical-align: 1px; }
+  .filmografia-box { margin-top: 18px; border-top: 1px dashed var(--linea); padding-top: 16px; }
+  .btn-explorar { width: 100%; padding: 11px 14px; border-radius: 4px; border: 1px solid var(--linea); background: rgba(243,234,216,.04); color: var(--papel); font: 600 11px var(--mono); letter-spacing: .1em; text-transform: uppercase; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+  .btn-explorar:hover { border-color: var(--papel); background: rgba(243,234,216,.08); }
+  .filmografia-panel { margin-top: 12px; }
+  .filmo-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .filmo-tabs button { background: rgba(243,234,216,.05); border: 1px solid var(--linea); color: var(--gris); padding: 4px 9px; border-radius: 999px; font: 11px var(--mono); cursor: pointer; }
+  .filmo-tabs button.activo { border-color: var(--rojo); color: var(--papel); background: rgba(229,50,45,.18); }
+  .filmo-busca { width: 100%; padding: 9px 12px; border-radius: 4px; border: 1px solid var(--linea); background: var(--tinta); color: var(--papel); font: 13px var(--mono); outline: none; margin-bottom: 8px; }
+  .filmo-busca:focus { border-color: var(--ambar); }
+  .filmo-lista { list-style: none; margin: 0; padding: 0; max-height: 360px; overflow-y: auto; }
+  .filmo-lista li { padding: 8px 0; border-bottom: 1px dashed var(--linea); }
+  .filmo-lista li:last-child { border-bottom: 0; }
+  .filmo-lista .pers { font-size: 16px; font-style: italic; }
+  .filmo-lista .meta { display: block; font: 11px var(--mono); color: var(--gris); margin-top: 2px; }
+  .btn-mas-filmo { width: 100%; margin-top: 8px; padding: 8px; background: transparent; border: 1px dashed var(--linea); border-radius: 4px; color: var(--gris); font: 600 11px var(--mono); cursor: pointer; }
+  .btn-mas-filmo:hover { color: var(--papel); border-color: var(--gris); }
+  .turno-box { cursor: pointer; transition: border-color .15s; }
+  .turno-box:hover { border-color: var(--ambar); }
 
   .pregunta { margin-top: 18px; padding-top: 16px; border-top: 1px dashed var(--linea); }
   .pregunta .fila { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
@@ -229,6 +254,10 @@
       <button type="button" data-obra="Friends">Friends</button>
       <button type="button" data-obra="Marvel">Marvel</button>
       <button type="button" data-obra="Disney">Disney</button>
+      <button type="button" data-obra="Toy Story">Toy Story</button>
+      <button type="button" data-obra="Los Vengadores">Los Vengadores</button>
+      <button type="button" data-obra="Star Wars">Star Wars</button>
+      <button type="button" data-obra="The Walking Dead">The Walking Dead</button>
     </div>
     <div class="sugerencias" id="sugerencias"></div>
     <div class="nota" id="notaObra">Película, serie, personaje o actor original. Con esto acierta casi siempre.</div>
@@ -282,14 +311,18 @@ const codigo = seg => {
 };
 
 let sesion, ldaMu, ldaW, centroides, trozos, actores, dim, umbrales;
+let sesion, ldaMu, ldaW, centroides, trozos, actores, dim, umbrales, cohorteMu, cohorteSd;
 const UMBRALES_DEFECTO = {
   umbral_fiable: 0.3663, umbral_dudoso: 0.252, margen_fiable: 0.1115, margen_dudoso: 0.0502,
   z_fiable: 5.3001, descuento_contexto_max: 0.035, umbral_1a1_fiable: 0.337, umbral_1a1_dudoso: 0.2319,
+  umbral_fiable: 0.5087, umbral_dudoso: 0.4756, margen_fiable: 0.1438, margen_dudoso: 0.0647,
+  z_fiable: 5.3457, descuento_contexto_max: 0.035, umbral_1a1_fiable: 0.4756, umbral_1a1_dudoso: 0.4376,
   beta_exceso_trozos: 0.012
 };
 
 // Almacenamiento persistente en navegador (CacheStorage) para arranque instantáneo (<200 ms) tras la 1ª visita
 const CACHE_ARTEFACTOS = 'estavoz-v3-artefactos';
+const CACHE_ARTEFACTOS = 'estavoz-v4-artefactos';
 
 async function descargar(url, alAvanzar = () => {}) {
   if ('caches' in window) {
@@ -338,6 +371,7 @@ async function descargar(url, alAvanzar = () => {}) {
 
 async function cargar() {
   const barra = $('carga').firstElementChild;
+  if ('caches' in window) caches.delete('estavoz-v3-artefactos').catch(() => {});
   try {
     const [modelo, lda, cent, troz, meta] = await Promise.all([
       descargar('modelo/voxblink-int8.onnx', p => { barra.style.width = `${p * 100}%`; estado.textContent = `Preparando la sala… ${Math.round(p * 100)}%`; }),
@@ -350,6 +384,26 @@ async function cargar() {
     dim = meta.dim; actores = meta.actores; umbrales = { ...UMBRALES_DEFECTO, ...(meta.umbrales_rechazo || {}) };
     ldaMu = new Float32Array(lda, 0, dim); ldaW = new Float32Array(lda, dim * 4);
     centroides = new Float32Array(cent);
+    // Estadísticas de cohorte por actor sobre sus 50 vecinos más cercanos (para AS-Norm contra actores imán)
+    const nA_c = actores.length;
+    cohorteMu = new Float32Array(nA_c); cohorteSd = new Float32Array(nA_c);
+    const kVec = Math.min(50, Math.max(1, nA_c - 1));
+    for (let i = 0; i < nA_c; i++) {
+      const sims = [];
+      const oi = i * dim;
+      for (let j = 0; j < nA_c; j++) {
+        if (i === j) continue;
+        let s = 0, oj = j * dim;
+        for (let d_i = 0; d_i < dim; d_i++) s += centroides[oi + d_i] * centroides[oj + d_i];
+        sims.push(s);
+      }
+      sims.sort((a, b) => b - a);
+      const topK = sims.slice(0, kVec);
+      const muK = topK.reduce((a, b) => a + b, 0) / topK.length;
+      const sdK = Math.sqrt(topK.reduce((a, x) => a + (x - muK) * (x - muK), 0) / topK.length);
+      cohorteMu[i] = muK;
+      cohorteSd[i] = Math.max(sdK, 1e-4);
+    }
     // todas las huellas de cada actor (exportar_web.py): inicio por actor, escala y valores en int8
     const nA = actores.length + 1, inicio = new Uint32Array(troz, 0, nA);
     const n = inicio[nA - 1], escala = new Float32Array(troz, nA * 4, n), q8 = new Int8Array(troz, (nA + n) * 4);
@@ -497,12 +551,30 @@ function analizarVAD(audio, sr = SR) {
 
 function juntarSegmentos(audio, segs) {
   const total = segs.reduce((a, s) => a + (s.finM - s.iniM), 0);
+function juntarSegmentos(audio, segs, fadeSeg = 0.010) {
+  if (!segs.length) return new Float32Array(0);
+  if (segs.length === 1) return audio.slice(segs[0].iniM, segs[0].finM);
+  const fade = Math.max(0, Math.round(SR * fadeSeg));
+  const partes = segs.map((s, idx) => {
+    const t = audio.slice(s.iniM, s.finM);
+    const f = Math.min(fade, Math.floor(t.length / 4));
+    if (f > 1) {
+      for (let i = 0; i < f; i++) {
+        const w = i / f;
+        if (idx > 0) t[i] *= w;
+        if (idx < segs.length - 1) t[t.length - 1 - i] *= w;
+      }
+    }
+    return t;
+  });
+  const total = partes.reduce((a, p) => a + p.length, 0);
   const out = new Float32Array(total);
   let o = 0;
   for (const s of segs) {
     out.set(audio.subarray(s.iniM, s.finM), o);
     o += (s.finM - s.iniM);
   }
+  for (const p of partes) { out.set(p, o); o += p.length; }
   return out;
 }
 
@@ -523,15 +595,35 @@ async function huellaTrozo(t) {
   const r = await sesion.run({ wav: new ort.Tensor('float32', t, [1, t.length]) });
   const v = r.huella.data, n = Math.hypot(...v);
   return Float32Array.from(v, x => x / n);
+  const h = Float32Array.from(v, x => x / n);
+  h.durPeso = Math.sqrt(Math.max(1, t.length / SR));
+  return h;
 }
 
 async function huellasDe(audio) {
   audio = audio.subarray(0, MAX_CONSULTA);
+  if (audio.length < TROZO_MIN) return [];
+  // Ventanas equilibradas (>= 6 s cuando hay audio suficiente) evitando colas cortas ruidosas
+  if (audio.length <= 11 * SR) {
+    return [await huellaTrozo(audio)];
+  }
+  const ventanas = [];
+  if (audio.length <= 18 * SR) {
+    const mitad = Math.floor(audio.length / 2);
+    ventanas.push(audio.slice(0, Math.min(audio.length, mitad + SR)), audio.slice(Math.max(0, mitad - SR)));
+  } else {
+    const paso = 6 * SR;
+    for (let i = 0; i < audio.length; i += paso) {
+      const t = audio.slice(i, Math.min(audio.length, i + TROZO));
+      if (t.length >= 4 * SR) ventanas.push(t);
+    }
+  }
   const out = [];
   for (let i = 0; i < audio.length; i += TROZO) {
     const t = audio.slice(i, i + TROZO);
     if (t.length >= TROZO_MIN) out.push(await huellaTrozo(t));
   }
+  for (const t of ventanas) out.push(await huellaTrozo(t));
   return out;
 }
 
@@ -564,12 +656,27 @@ function proyectar(q) {
 
 // Parecido de la grabación con cada actor: media entre el parecido con su huella media y con
 // sus 3 trozos más parecidos (solo con los candidatos, si se ha dicho qué se está viendo)
+// Parecido de la grabación con cada actor: media ponderada por duración entre el centroide y
+// sus 4 trozos más parecidos, más ajuste AS-Norm contra actores imán (hubness)
 function puntuar(consulta, top = 3, candidatos = null) {
+  const pesos = consulta.map(q => q.durPeso || 1);
+  const sumaPesos = pesos.reduce((a, b) => a + b, 0) || 1;
   const qs = consulta.map(proyectar);
   const indices = candidatos ? [...candidatos] : actores.map((_, i) => i);
   const parecido = (vs, o) => { let s = 0; for (const q of qs) for (let k = 0; k < dim; k++) s += q[k] * vs[o + k]; return s / qs.length; };
   const beta = (umbrales && umbrales.beta_exceso_trozos) || 0;
   const lista = indices.map(i => {
+  const parecido = (vs, o) => {
+    let s = 0;
+    for (let qi = 0; qi < qs.length; qi++) {
+      const q = qs[qi];
+      let dot = 0;
+      for (let k = 0; k < dim; k++) dot += q[k] * vs[o + k];
+      s += dot * pesos[qi];
+    }
+    return s / sumaPesos;
+  };
+  let lista = actores.map((actor, i) => {
     const media = parecido(centroides, i * dim);
     const p = [];
     for (let t = trozos.inicio[i]; t < trozos.inicio[i + 1]; t++) p.push(parecido(trozos.v, t * dim));
@@ -577,7 +684,25 @@ function puntuar(consulta, top = 3, candidatos = null) {
     const mejores = p.length ? p.slice(0, 3).reduce((a, b) => a + b) / Math.min(3, p.length) : media;
     const penal = beta > 0 ? beta * Math.max(0, Math.log(Math.max(p.length, 1) / 12)) : 0;
     return { ...actores[i], parecido: (media + mejores - penal) / 2 };
+    const kTop = Math.min(4, p.length);
+    const mejores = kTop ? p.slice(0, kTop).reduce((a, b) => a + b, 0) / kTop : media;
+    return { ...actor, _idx: i, parecido: 0.5 * (media + mejores) };
   });
+  if (lista.length >= 8 && cohorteMu && cohorteSd) {
+    const ordenRaw = lista.map(x => x.parecido).sort((a, b) => b - a);
+    const cohQ = ordenRaw.slice(1, Math.min(51, ordenRaw.length));
+    const muQ = cohQ.reduce((a, b) => a + b, 0) / cohQ.length;
+    const sdQ = Math.max(Math.sqrt(cohQ.reduce((a, x) => a + (x - muQ) * (x - muQ), 0) / cohQ.length), 1e-4);
+    for (const item of lista) {
+      const zQ = (item.parecido - muQ) / sdQ;
+      const zA = (item.parecido - cohorteMu[item._idx]) / cohorteSd[item._idx];
+      item.parecido = item.parecido + 0.04 * (0.5 * (zQ + zA));
+    }
+  }
+  if (candidatos) {
+    const candSet = new Set(candidatos);
+    lista = lista.filter(x => candSet.has(x._idx));
+  }
   lista.sort((x, y) => y.parecido - x.parecido);
   const seleccion = lista.slice(0, top);
   seleccion.estado = clasificarConsulta(lista, Boolean(candidatos));
@@ -603,6 +728,7 @@ function clasificarConsulta(ordenada, conContexto = false) {
   let desc = 0;
   if (conContexto && actores.length > 1 && ordenada.length < actores.length) {
     const ratio = Math.log(Math.max(ordenada.length, 2)) / Math.log(actores.length);
+    const ratio = Math.sqrt(Math.log(Math.max(ordenada.length, 2)) / Math.log(actores.length));
     desc = u.descuento_contexto_max * (1 - Math.min(Math.max(ratio, 0), 1));
   }
   const uFiable = u.umbral_fiable - desc, uDudoso = u.umbral_dudoso - 0.5 * desc;
@@ -681,15 +807,57 @@ async function pistaActual() {
   return { tipo: 'texto', texto: obra.value.trim(), ids: [...new Set(ss.flatMap(e => e.ids))], partes: ss };
 }
 
+const papelesCache = new Map();
+async function cargarPapelesActor(actor) {
+  if (!actor) return [];
+  const idx = actor._idx ?? actores.findIndex(a => a.id === actor.id);
+  const key = actor.id || String(idx);
+  if (papelesCache.has(key)) return papelesCache.get(key);
+  let filas = null;
+  if (idx >= 0) {
+    try {
+      const r = await fetch(`datos/papeles/${idx}.json`);
+      if (r.ok) filas = await r.json();
+    } catch {}
+  }
+  if (!filas && actor.id) {
+    try {
+      const r = await fetch(`/api/actor/${encodeURIComponent(actor.id)}?limite=200`);
+      if (r.ok) {
+        const d = await r.json();
+        filas = ((d.filmografia && d.filmografia.items) || []).map(it => [
+          it.obra || '', it.personaje || '', it.anio || null, it.actor_original || ''
+        ]);
+      }
+    } catch {}
+  }
+  if (!filas) {
+    filas = (actor.trabajos || []).map(t => {
+      const p = papel(t);
+      return [p.obra || t, p.personaje || '', p.anio ? Number(p.anio) : null, ''];
+    });
+  }
+  papelesCache.set(key, filas);
+  return filas;
+}
+
 // Qué papel de este doblador encaja con la pista ("Buzz Lightyear en Toy Story 4")
 async function papelDePista(indice, pista) {
+async function papelDePista(actorOIndice, pista) {
   if (!pista) return null;
+  const actor = typeof actorOIndice === 'number' ? actores[actorOIndice] : actorOIndice;
+  if (!actor) return null;
   try {
     const filas = await fetch(`datos/papeles/${indice}.json`).then(r => r.json());
+    const filas = await cargarPapelesActor(actor);
     const encaja = (e, [obraT, personaje, , original]) => {
       const q = plano(e.texto).trim();
       const t = e.tipo === 'obra' ? obraT : e.tipo === 'personaje' ? personaje : original.split(',').reverse().join(' ');
       return plano(t).includes(' ' + q);
+      if (!q) return false;
+      const origFmt = (original || '').split(',').reverse().join(' ').trim();
+      const t = e.tipo === 'obra' ? obraT : e.tipo === 'personaje' ? personaje : origFmt;
+      return (' ' + plano(t)).includes(' ' + q) || plano(t).includes(q);
     };
     const opciones = pista.tipo === 'texto' ? pista.partes : [pista];
     for (const e of opciones) {
@@ -703,14 +871,29 @@ async function papelDePista(indice, pista) {
 const PILOTO = { grabando: 'GRABANDO', analizando: 'ANALIZANDO' };
 function modo(m) { sala.className = m || ''; $('piloto').textContent = PILOTO[m] || 'EN SILENCIO'; }
 
+let ultimoDialogo = null, ultimaLista = null;
 // Quién es, con la pista si la hay, y la ficha en pantalla
 async function resolver(consulta, dialogo = null) {
   const pista = await pistaActual();
   ultimaPista = pista && pista.ids.length ? { texto: pista.texto, n: pista.ids.length } : null;
   const lista = puntuar(consulta, 3, ultimaPista ? pista.ids : null);
   lista[0].papelPista = await papelDePista(actores.indexOf(actores.find(a => a.id === lista[0].id)), pista);
+  const lista = puntuar(consulta, 5, ultimaPista ? pista.ids : null);
+  lista[0].papelPista = await papelDePista(lista[0], pista);
+  ultimoDialogo = dialogo;
   if (dialogo) lista.dialogo = dialogo;
+  ultimaLista = lista;
   pintar(lista);
+}
+
+function seleccionarVozDialogo(n) {
+  if (!ultimoDialogo) return;
+  ultimoDialogo.activo = n;
+  const consultaElegida = n === 1 ? ultimoDialogo.consulta1 : ultimoDialogo.consulta2;
+  if (consultaElegida && consultaElegida.length) {
+    ultimaConsulta = consultaElegida;
+    resolver(consultaElegida, ultimoDialogo);
+  }
 }
 
 async function identificar(blob, huellasListas = null, audioPreprocesado = null) {
@@ -739,6 +922,9 @@ async function identificar(blob, huellasListas = null, audioPreprocesado = null)
       }
 
       // Si hay 2 turnos de diálogo separados por pausa (diarización ligera de 2 personajes)
+      let consultaNueva = null;
+      // Si hay 2+ turnos de diálogo separados por pausa (diarización ligera), evaluamos por hablante
+      // para no mezclar dos voces distintas en una única huella borrosa
       if (vad.turnos.length >= 2 && vad.turnos[0].dur >= 2.0 && vad.turnos[1].dur >= 2.0) {
         const h1 = await huellasDe(vad.turnos[0].muestras);
         const h2 = await huellasDe(vad.turnos[1].muestras);
@@ -747,12 +933,34 @@ async function identificar(blob, huellasListas = null, audioPreprocesado = null)
           const r1 = puntuar(h1, 1, pista && pista.ids.length ? pista.ids : null);
           const r2 = puntuar(h2, 1, pista && pista.ids.length ? pista.ids : null);
           if (r1.length && r2.length && r1[0].id !== r2[0].id && r1[0].parecido >= 0.28 && r2[0].parecido >= 0.28) {
+        const pista = await pistaActual();
+        const cands = pista && pista.ids.length ? pista.ids : null;
+        const tMuestras = [];
+        for (const tr of vad.turnos.slice(0, 4)) {
+          const ht = await huellasDe(normalizarPico(tr.muestras));
+          if (ht.length) {
+            const rt = puntuar(ht, 1, cands);
+            tMuestras.push({ tr, ht, top: rt[0] });
+          }
+        }
+        if (tMuestras.length >= 2) {
+          const g1 = tMuestras[0];
+          const g2 = tMuestras.find(x => x.top.id !== g1.top.id);
+          if (g2 && g1.top.parecido >= 0.38 && g2.top.parecido >= 0.38) {
+            // Agrupar todos los turnos de cada uno de los 2 hablantes
+            const hVoz1 = tMuestras.filter(x => x.top.id === g1.top.id).flatMap(x => x.ht);
+            const hVoz2 = tMuestras.filter(x => x.top.id === g2.top.id).flatMap(x => x.ht);
+            const dur1 = tMuestras.filter(x => x.top.id === g1.top.id).reduce((a, x) => a + x.tr.dur, 0);
+            const dur2 = tMuestras.filter(x => x.top.id === g2.top.id).reduce((a, x) => a + x.tr.dur, 0);
             dialogo = {
               actor1: r1[0],
               actor2: r2[0],
               dur1: vad.turnos[0].dur,
               dur2: vad.turnos[1].dur,
+              actor1: g1.top, actor2: g2.top, dur1, dur2,
+              consulta1: hVoz1, consulta2: hVoz2, activo: dur1 >= dur2 ? 1 : 2,
             };
+            consultaNueva = dur1 >= dur2 ? hVoz1 : hVoz2;
           }
         }
       }
@@ -760,6 +968,11 @@ async function identificar(blob, huellasListas = null, audioPreprocesado = null)
       // Aislar exclusivamente tramos de voz activa eliminando silencios y música instrumental
       const soloVoz = normalizarPico(juntarSegmentos(audio, vad.segmentos));
       const consultaNueva = await huellasDe(soloVoz);
+      if (!consultaNueva) {
+        // Aislar exclusivamente tramos de voz activa eliminando silencios y música instrumental
+        const soloVoz = normalizarPico(juntarSegmentos(audio, vad.segmentos));
+        consultaNueva = await huellasDe(soloVoz);
+      }
 
       if (acumulandoToma && ultimaConsulta && ultimaConsulta.length) {
         tomasAcumuladas++;
@@ -892,6 +1105,9 @@ $('fichero').onchange = e => {
 // El parecido del modelo (coseno) no es un porcentaje; esto lo traduce a una probabilidad calibrada.
 // Curva por tramos calibrada sobre 3.373 consultas reales de VoxBlink2 ResNet100 (backend/rechazo.py, ECE = 0.0103).
 const CURVA_PORCENTAJE = [[0.15, 0], [0.22, 19], [0.28, 28], [0.33, 33], [0.37, 47], [0.42, 64], [0.48, 86], [0.54, 95], [0.60, 100]];
+// El parecido del modelo (AS-Norm) no es un porcentaje directo; esto lo traduce a probabilidad calibrada.
+// Curva por tramos calibrada sobre 3.419 consultas independientes de VoxBlink2 ResNet100 + AS-Norm (ECE = 0.0124).
+const CURVA_PORCENTAJE = [[0.25, 0], [0.35, 14], [0.42, 21], [0.47, 30], [0.52, 46], [0.58, 65], [0.66, 86], [0.74, 96], [0.85, 100]];
 const aPorcentaje = s => Math.round(Math.max(0, Math.min(1, (s - 0.15) / 0.35)) * 100);
 function aPorcentajeCalibrado(s) {
   if (s <= CURVA_PORCENTAJE[0][0]) return 0;
@@ -970,6 +1186,24 @@ let audioMuestra = null, btnMuestraActivo = null;
 function reproducirMuestra(idNum, btnEl) {
   const url = `https://www.eldoblaje.com/datos/Muestras/${idNum}.mp3`;
   if (audioMuestra && !audioMuestra.paused && audioMuestra.dataset.id === idNum) {
+function urlsMuestraActor(idNum, rutaMuestra = '') {
+  const urls = [];
+  if (rutaMuestra) {
+    urls.push(rutaMuestra.startsWith('http') ? rutaMuestra : `https://www.eldoblaje.com/datos/${rutaMuestra.replace(/^\/+/, '')}`);
+  }
+  if (/^\d+$/.test(String(idNum))) {
+    for (const carpeta of ['Muestras', 'Saludos', 'Muestras3', 'Muestras4']) {
+      const u = `https://www.eldoblaje.com/datos/${carpeta}/${idNum}.mp3`;
+      if (!urls.includes(u)) urls.push(u);
+    }
+  }
+  return urls;
+}
+
+function reproducirMuestra(idNum, btnEl, rutaMuestra = '') {
+  const urls = urlsMuestraActor(idNum, rutaMuestra);
+  if (!urls.length) return;
+  if (audioMuestra && !audioMuestra.paused && audioMuestra.dataset.id === String(idNum)) {
     audioMuestra.pause();
     actualizarBotonMuestra(btnEl, false);
     return;
@@ -980,6 +1214,9 @@ function reproducirMuestra(idNum, btnEl) {
   }
   audioMuestra = new Audio(url);
   audioMuestra.dataset.id = idNum;
+  let idxUrl = 0;
+  audioMuestra = new Audio(urls[0]);
+  audioMuestra.dataset.id = String(idNum);
   btnMuestraActivo = btnEl;
   actualizarBotonMuestra(btnEl, true);
   audioMuestra.onended = () => {
@@ -987,6 +1224,15 @@ function reproducirMuestra(idNum, btnEl) {
     btnMuestraActivo = null;
   };
   audioMuestra.onerror = () => {
+    idxUrl++;
+    if (idxUrl < urls.length) {
+      audioMuestra.src = urls[idxUrl];
+      audioMuestra.play().catch(() => {
+        actualizarBotonMuestra(btnEl, false);
+        btnMuestraActivo = null;
+      });
+      return;
+    }
     actualizarBotonMuestra(btnEl, false);
     btnEl.innerHTML = '<span>Muestra no disponible</span>';
     btnEl.disabled = true;
@@ -1011,45 +1257,271 @@ function actualizarBotonMuestra(btnEl, sonando) {
   }
 }
 
+const ETIQUETAS_TIPO = {
+  pelicula: 'Peli', serie: 'Serie', animacion: 'Animación', videojuego: 'Juego', documental: 'Docu', otros: 'Otros',
+};
+const TITULOS_TAB_TIPO = [
+  ['todo', 'Todos'],
+  ['pelicula', 'Películas'],
+  ['serie', 'Series'],
+  ['animacion', 'Animación'],
+  ['videojuego', 'Videojuegos'],
+  ['documental', 'Docu / TV'],
+  ['otros', 'Otros'],
+];
+
+function clasificarObraJs(obra, personaje = '') {
+  const t = (' ' + (obra || '') + ' ').toLowerCase();
+  const p = (personaje || '').toLowerCase();
+  if (t.includes('[videojuego') || t.includes('dlc]')) return 'videojuego';
+  if (t.includes('[documental') || t.includes('[docureality') || t.includes('[programa tv')) return 'documental';
+  if (t.includes('[cortometraje') || t.includes('[audiocuento') || t.includes('[audiolibro') || t.includes('[musical')) return 'otros';
+  if (t.includes('[serie de animación') || t.includes('[animación') || t.includes('[anime')) return 'animacion';
+  if (t.includes('[serie tv') || t.includes('[miniserie') || /\[\d+ª\s*temporada\]/.test(t) || /\(\d+x\d+/.test(p)) return 'serie';
+  return 'pelicula';
+}
+
+function limpiarEtiquetaObraJs(obra) {
+  return (obra || '')
+    .replace(/\s*\[(Cine|Serie TV(?:\s*\([^)]*\))?|Serie de Animación|Animación|Videojuego|Miniserie|Documental|Programa TV)\]/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function tituloBaseJs(t) {
+  return (t || '').replace(/\[[^\]]*\]|\(\d+x\d+\)/g, '').replace(/\s+/g, ' ').replace(/^[ :\-]+|[ :\-]+$/g, '');
+}
+
+const MINUSCULAS_TIT = new Set('de del la las el los lo un una unos unas y e o u en a al con por para sin su sus'.split(' '));
+function tituloBonitoJs(t) {
+  if (!t || t !== t.toUpperCase()) return t || '';
+  return t.toLowerCase().split(' ').map((w, k) => (k && MINUSCULAS_TIT.has(w)) ? w : (w.slice(0, 1).toUpperCase() + w.slice(1))).join(' ');
+}
+
+function nombreOriginalJs(orig) {
+  let a = (orig || '').trim();
+  if (!a || /^(?:\(voz\)|\(desconocido\)|desconocido|sin acreditar|-|n\/a)$/i.test(a)) return '';
+  if (a.split(',').length === 2) {
+    const [ap, nom] = a.split(',').map(x => x.trim());
+    a = `${nom} ${ap}`.trim();
+  }
+  return a === a.toUpperCase() ? tituloBonitoJs(a) : a;
+}
+
+function resumenTiposTexto(rt) {
+  if (!rt) return '';
+  const partes = [
+    ['pelicula', 'pelis'],
+    ['serie', 'series'],
+    ['animacion', 'animación'],
+    ['videojuego', 'juegos'],
+    ['documental', 'docu'],
+  ].filter(([k]) => rt[k] > 0).map(([k, lbl]) => `${rt[k]} ${lbl}`);
+  return partes.join(' · ');
+}
+
+let estadoFilmo = { abierto: false, tipo: 'todo', q: '', limite: 40, filas: [], actor: null };
+
+function verCandidato(idx) {
+  if (!ultimaLista || !ultimaLista.length) return;
+  const elegido = ultimaLista.find(x => x._idx === idx) || (actores[idx] ? { ...actores[idx], _idx: idx, parecido: 0 } : null);
+  if (!elegido) return;
+  const otros = ultimaLista.filter(x => x._idx !== elegido._idx);
+  const nuevaLista = [elegido, ...otros];
+  nuevaLista.estado = ultimaLista.estado;
+  nuevaLista.dialogo = ultimaLista.dialogo;
+  nuevaLista.esInspeccion = elegido._idx !== ultimaLista[0]._idx;
+  pintar(nuevaLista);
+}
+
+function volverResultadoPrincipal() {
+  if (ultimaLista) pintar(ultimaLista);
+}
+
+async function alternarFilmografia(forzarAbrir = false) {
+  const panel = $('filmografia-panel');
+  if (!panel || !estadoFilmo.actor) return;
+  if (!forzarAbrir && estadoFilmo.abierto) {
+    estadoFilmo.abierto = false;
+    panel.style.display = 'none';
+    return;
+  }
+  estadoFilmo.abierto = true;
+  panel.style.display = 'block';
+  if (!estadoFilmo.filas.length) {
+    $('filmo-lista').innerHTML = '<li class="dato">Cargando filmografía completa…</li>';
+    estadoFilmo.filas = await cargarPapelesActor(estadoFilmo.actor);
+  }
+  renderFilmografia();
+}
+
+function buscarVozHabitual(nombreOrig) {
+  estadoFilmo.tipo = 'todo';
+  estadoFilmo.q = nombreOrig;
+  estadoFilmo.limite = 40;
+  alternarFilmografia(true).then(() => {
+    const inp = $('filmo-busca');
+    if (inp) inp.value = nombreOrig;
+    const box = $('filmografia-box');
+    if (box) box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  });
+}
+
+function setTipoFilmo(tipo) {
+  estadoFilmo.tipo = tipo;
+  estadoFilmo.limite = 40;
+  renderFilmografia();
+}
+
+function onBuscarFilmo(valor) {
+  estadoFilmo.q = valor;
+  estadoFilmo.limite = 40;
+  renderFilmografia();
+}
+
+function masFilmografia() {
+  estadoFilmo.limite += 60;
+  renderFilmografia();
+}
+
+function renderFilmografia() {
+  const tabsEl = $('filmo-tabs');
+  const listaEl = $('filmo-lista');
+  const masBtn = $('btn-mas-filmo');
+  if (!tabsEl || !listaEl) return;
+
+  const qNorm = plano(estadoFilmo.q).trim();
+  const palabras = qNorm ? qNorm.split(/\s+/).filter(Boolean) : [];
+  const conteos = { todo: 0, pelicula: 0, serie: 0, animacion: 0, videojuego: 0, documental: 0, otros: 0 };
+  const filtradas = [];
+
+  for (const r of estadoFilmo.filas) {
+    const [obra, pers, anio, orig] = r;
+    const origBonito = nombreOriginalJs(orig);
+    const cat = clasificarObraJs(obra, pers);
+    if (palabras.length) {
+      const txt = plano(`${obra} ${pers} ${origBonito}`);
+      if (!palabras.every(w => txt.includes(w))) continue;
+    }
+    conteos.todo++;
+    conteos[cat] = (conteos[cat] || 0) + 1;
+    if (estadoFilmo.tipo !== 'todo' && cat !== estadoFilmo.tipo) continue;
+    filtradas.push({ obra, pers: pers || origBonito || 'Voz', anio: anio || 0, orig: origBonito, cat });
+  }
+
+  filtradas.sort((a, b) => (b.anio - a.anio) || a.obra.localeCompare(b.obra));
+
+  tabsEl.innerHTML = TITULOS_TAB_TIPO
+    .filter(([k]) => k === 'todo' || conteos[k] > 0)
+    .map(([k, lbl]) => `<button type="button" class="${estadoFilmo.tipo === k ? 'activo' : ''}" onclick="setTipoFilmo('${k}')">${lbl} (${conteos[k] || 0})</button>`)
+    .join('');
+
+  if (!filtradas.length) {
+    listaEl.innerHTML = '<li class="dato" style="padding:12px 0">No hay papeles que coincidan con ese filtro.</li>';
+    if (masBtn) masBtn.style.display = 'none';
+    return;
+  }
+
+  const visibles = filtradas.slice(0, estadoFilmo.limite);
+  listaEl.innerHTML = visibles.map(it => {
+    const obraTxt = tituloBonitoJs(tituloBaseJs(it.obra)) || limpiarEtiquetaObraJs(it.obra);
+    const meta = [obraTxt, it.anio || '', it.orig ? `voz de ${it.orig}` : ''].filter(Boolean).join(' · ');
+    return `<li>
+      <span class="badge-tipo">${ETIQUETAS_TIPO[it.cat] || 'Obra'}</span>
+      <span class="pers">${esc(it.pers)}</span>
+      <span class="meta">${esc(meta)}</span>
+    </li>`;
+  }).join('');
+
+  if (masBtn) {
+    const restantes = filtradas.length - visibles.length;
+    masBtn.style.display = restantes > 0 ? 'block' : 'none';
+    masBtn.textContent = `Mostrar más (${restantes} restantes)`;
+  }
+}
+
 function pintar(lista) {
   const [top, ...otros] = lista;
   const estadoId = lista.estado || (aPorcentajeCalibrado(top.parecido) >= 50 ? 'identificado' : 'dudoso');
   const pct = aPorcentajeCalibrado(top.parecido);
   ultimo = top;
+  estadoFilmo = { abierto: false, tipo: 'todo', q: '', limite: 40, filas: [], actor: top };
+
   estado.textContent = estadoId === 'identificado'
     ? '¡Corten! La tenemos.'
     : (estadoId === 'dudoso' ? 'Toma dudosa… ¿será alguno de estos?' : 'No logro identificar esta voz con seguridad.');
   const rotuloFicha = estadoId === 'identificado'
     ? 'ESTA VOZ ES DE'
     : (estadoId === 'dudoso' ? 'TOMA DUDOSA · ¿QUIZÁ ES DE…?' : 'VOZ NO IDENTIFICADA · MÁS CERCANA A');
+  const rotuloFicha = lista.esInspeccion
+    ? 'CANDIDATO ALTERNATIVO · <a href="#" onclick="volverResultadoPrincipal(); return false" style="color:var(--ambar); text-decoration:underline">← VOLVER AL PRINCIPAL</a>'
+    : (estadoId === 'identificado'
+      ? 'ESTA VOZ ES DE'
+      : (estadoId === 'dudoso' ? 'TOMA DUDOSA · ¿QUIZÁ ES DE…?' : 'VOZ NO IDENTIFICADA · MÁS CERCANA A'));
   const encendidos = Math.round(pct / 5);
   let papeles = (top.trabajos || []).slice(0, 4).map(papel);
   if (top.papelPista) papeles = [{ ...top.papelPista, destacado: true }, ...papeles.filter(p => p.obra !== top.papelPista.obra)].slice(0, 4);
   res.dataset.otros = JSON.stringify(otros.map(o => ({ id: o.id, nombre: o.nombre })));
+  let papeles = (top.trabajos || []).slice(0, 6).map(papel);
+  if (top.papelPista) papeles = [{ ...top.papelPista, destacado: true }, ...papeles.filter(p => p.obra !== top.papelPista.obra)].slice(0, 6);
+  res.dataset.otros = JSON.stringify(otros.slice(0, 3).map(o => ({ id: o.id, nombre: o.nombre })));
 
   const idNumTop = String(top.id).split('-')[0];
   const urlFichaTop = `https://www.eldoblaje.com/datos/FichaActorDoblaje.asp?id=${idNumTop}`;
   const verificacionHtml = /^\d+$/.test(idNumTop) ? `
+  const rutaMuestraEsc = esc(top.muestra || '');
+  const verificacionHtml = (/^\d+$/.test(idNumTop) || top.muestra) ? `
     <div class="verificacion-actor">
       <button type="button" class="btn-muestra" onclick="reproducirMuestra('${idNumTop}', this)">
+      <button type="button" class="btn-muestra" onclick="reproducirMuestra('${esc(idNumTop)}', this, '${rutaMuestraEsc}')">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg>
         <span>Escuchar muestra oficial</span>
       </button>
       <a class="enlace-ficha" href="${urlFichaTop}" target="_blank" rel="noopener noreferrer">Ficha en eldoblaje.com ↗</a>
+      ${/^\d+$/.test(idNumTop) ? `<a class="enlace-ficha" href="${urlFichaTop}" target="_blank" rel="noopener noreferrer">Ficha en eldoblaje.com ↗</a>` : ''}
     </div>` : '';
 
+  const vozhHtml = (top.vozh && top.vozh.length) ? `
+    <div class="vozh">
+      <span class="rot">VOZ HABITUAL DE</span>
+      ${top.vozh.map(v => `<button type="button" data-orig="${esc(v.nombre)}" onclick="buscarVozHabitual(this.dataset.orig)">${esc(v.nombre)}${v.n ? ` (${v.n})` : ''}</button>`).join('')}
+    </div>` : '';
+
+  const tiposResumen = resumenTiposTexto(top.resumen_tipos);
+  const totalTxt = top.num_trabajos ? `${top.num_trabajos.toLocaleString('es-ES')} doblajes` : 'filmografía completa';
+  const explorarHtml = `
+    <div class="filmografia-box" id="filmografia-box">
+      <button type="button" class="btn-explorar" onclick="alternarFilmografia()">
+        <span>De qué más es · Explorar ${totalTxt}${tiposResumen ? ` (${esc(tiposResumen)})` : ''}</span>
+        <span>▾</span>
+      </button>
+      <div class="filmografia-panel" id="filmografia-panel" style="display:none">
+        <div class="filmo-tabs" id="filmo-tabs"></div>
+        <input type="search" class="filmo-busca" id="filmo-busca" placeholder="Buscar película, serie, juego, personaje o actor…" oninput="onBuscarFilmo(this.value)">
+        <ul class="filmo-lista" id="filmo-lista"></ul>
+        <button type="button" class="btn-mas-filmo" id="btn-mas-filmo" style="display:none" onclick="masFilmografia()">Mostrar más</button>
+      </div>
+    </div>`;
+
+  const activoDial = lista.dialogo ? (lista.dialogo.activo || 1) : 1;
   const dialogoHtml = lista.dialogo ? `
     <div class="aviso-dialogo">
       <div class="rotulo"><span>DIÁLOGO EN LA TOMA (2 VOCES DETECTADAS)</span></div>
       <p>En esta escena se han detectado dos intervenciones con voces distintas:</p>
+      <div class="rotulo"><span>DIÁLOGO EN LA TOMA (2 VOCES DETECTADAS · PULSA PARA CAMBIAR)</span></div>
+      <p>Se han detectado dos interlocutores distintos. Mostrando ${activoDial === 1 ? 'la 1ª voz' : 'la 2ª voz'}:</p>
       <div class="turnos-dialogo">
         <div class="turno-box">
           <span class="etiqueta-turno">1ª VOZ (${lista.dialogo.dur1.toFixed(1)} s)</span>
+        <div class="turno-box" style="${activoDial === 1 ? 'border-color:var(--ambar)' : 'opacity:.78'}" onclick="seleccionarVozDialogo(1)">
+          <span class="etiqueta-turno">1ª VOZ (${lista.dialogo.dur1.toFixed(1)} s)${activoDial === 1 ? ' · ACTIVA' : ''}</span>
           <strong>${esc(lista.dialogo.actor1.nombre)}</strong>
           <div class="dato">${aPorcentajeCalibrado(lista.dialogo.actor1.parecido)}% coincidencia</div>
         </div>
         <div class="turno-box">
           <span class="etiqueta-turno">2ª VOZ (${lista.dialogo.dur2.toFixed(1)} s)</span>
+        <div class="turno-box" style="${activoDial === 2 ? 'border-color:var(--ambar)' : 'opacity:.78'}" onclick="seleccionarVozDialogo(2)">
+          <span class="etiqueta-turno">2ª VOZ (${lista.dialogo.dur2.toFixed(1)} s)${activoDial === 2 ? ' · ACTIVA' : ''}</span>
           <strong>${esc(lista.dialogo.actor2.nombre)}</strong>
           <div class="dato">${aPorcentajeCalibrado(lista.dialogo.actor2.parecido)}% coincidencia</div>
         </div>
@@ -1069,19 +1541,30 @@ function pintar(lista) {
         <div>
           <div class="nombre">${esc(top.nombre)}</div>
           ${top.num_trabajos ? `<div class="dato">${top.num_trabajos.toLocaleString('es-ES')} DOBLAJES</div>` : ''}
+          ${top.num_trabajos ? `<div class="dato">${top.num_trabajos.toLocaleString('es-ES')} DOBLAJES${tiposResumen ? ` · ${esc(tiposResumen.toUpperCase())}` : ''}</div>` : ''}
         </div>
       </div>
       ${verificacionHtml}
       <div class="medidor">
+      ${!lista.esInspeccion ? `<div class="medidor">
         <div class="rotulo"><span>COINCIDENCIA</span><b>${pct}%</b></div>
         <div class="leds">${Array.from({ length: 20 }, (_, i) =>
           `<i class="${i < encendidos ? 'on' : ''}" style="animation-delay:${i * 40}ms"></i>`).join('')}</div>
       </div>
+      </div>` : ''}
       ${papeles.length ? `<div class="rotulo" style="margin-top:24px"><span>LE HAS OÍDO COMO</span></div>
       <ul class="guion">${papeles.map(p => `
         <li class="${p.destacado ? 'acierto-pista' : ''}"><span class="personaje">${esc(p.personaje)}</span>
             <span class="obra">${esc(p.obra)}${p.anio ? ' · ' + p.anio : ''}</span></li>`).join('')}
+      <ul class="guion">${papeles.map(p => {
+        const cat = clasificarObraJs(p.obra, p.personaje);
+        const obraLimpia = limpiarEtiquetaObraJs(p.obra) || p.obra;
+        return `<li class="${p.destacado ? 'acierto-pista' : ''}"><span class="personaje">${esc(p.personaje)}</span>
+            <span class="obra"><span class="badge-tipo">${ETIQUETAS_TIPO[cat] || 'Obra'}</span>${esc(obraLimpia)}${p.anio ? ' · ' + p.anio : ''}</span></li>`;
+      }).join('')}
       </ul>` : ''}
+      ${vozhHtml}
+      ${explorarHtml}
       ${ultimaPista ? '' : `<div class="sin-pista">
         <p>${estadoId === 'identificado' ? '¿Quieres asegurarte?' : '¿No es?'} Dime qué estás viendo y vuelvo a mirar esta misma toma.</p>
         <button onclick="pedirPista()">Decir qué estoy viendo</button></div>`}
@@ -1094,10 +1577,12 @@ function pintar(lista) {
     </article>
     ${otros.length ? `<article class="ficha" style="animation-delay:.12s">
       <div class="rotulo"><span>${estadoId === 'desconocido' ? 'OTRAS VOCES CERCANAS (BAJA FIABILIDAD)' : 'TAMBIÉN PODRÍA SER'}</span></div>
+      <div class="rotulo"><span>${estadoId === 'desconocido' ? 'OTRAS VOCES CERCANAS (BAJA FIABILIDAD · PULSA PARA VER FICHA)' : 'TAMBIÉN PODRÍA SER · PULSA PARA VER DE QUÉ MÁS ES'}</span></div>
       ${otros.map(o => {
         const idNumO = String(o.id).split('-')[0];
         const tieneId = /^\d+$/.test(idNumO);
         return `<div class="otro">${foto(o, true)}<span class="n">${esc(o.nombre)}</span><span class="pct">${aPorcentajeCalibrado(o.parecido)}%</span>${tieneId ? `<a class="enlace-ficha" href="https://www.eldoblaje.com/datos/FichaActorDoblaje.asp?id=${idNumO}" target="_blank" rel="noopener noreferrer" style="font-size:11px; margin-left:4px" title="Ver ficha">↗</a>` : ''}</div>`;
+        return `<div class="otro" onclick="verCandidato(${o._idx})" title="Ver filmografía y muestra de ${esc(o.nombre)}">${foto(o, true)}<span class="n">${esc(o.nombre)}</span><span class="pct">${aPorcentajeCalibrado(o.parecido)}%</span>${tieneId ? `<a class="enlace-ficha" href="https://www.eldoblaje.com/datos/FichaActorDoblaje.asp?id=${idNumO}" target="_blank" rel="noopener noreferrer" style="font-size:11px; margin-left:4px" title="Ver ficha en eldoblaje.com" onclick="event.stopPropagation()">↗</a>` : ''}</div>`;
       }).join('')}
     </article>` : ''}`;
   res.scrollIntoView({ behavior: 'smooth', block: 'start' });

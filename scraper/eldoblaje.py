@@ -12,23 +12,155 @@ Resultado en data/actores/<id>-<nombre>/ (ficha.json y clips/), listo para backe
 Va despacio a propósito (PAUSA_SEG entre peticiones) para no cargar su servidor.
 """
 import argparse
+from collections import Counter
+from html import unescape
+from html.parser import HTMLParser
 import json
 import re
 import sys
 import time
 import unicodedata
 from pathlib import Path
+from urllib.parse import quote_plus
 
 import requests
-from bs4 import BeautifulSoup
+try:
+    from bs4 import BeautifulSoup
+except ImportError:
+    BeautifulSoup = None  # respaldo con parser estándar de Python
+
+RAIZ = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(RAIZ / "backend"))
+from filmografia import (  # noqa: E402
+    clasificar_tipo_obra,
+    elegir_trabajos_destacados,
+    nombre_original,
+    titulo_base as _limpiar_titulo_obra,
+)
 
 BASE = "https://www.eldoblaje.com/datos/"
 PAUSA_SEG = 0.7
 LETRAS = list("abcdefghijklmnopqrstuvwxyz") + ["ñ", "num"]
 CARPETAS_AUDIO = ["Muestras", "Saludos", "Muestras3", "Muestras4"]
 MAX_TRABAJOS = 15
+_MARCAS_SIN_ORIGINAL = {"(voz)", "(desconocido)", "desconocido", "sin acreditar", "-", "n/a"}
 
 RAIZ = Path(__file__).resolve().parent.parent
+
+def _limpiar_html(fragmento: str) -> str:
+    txt = re.sub(r"<[^>]+>", " ", fragmento or "")
+    return re.sub(r"\s+", " ", unescape(txt)).strip()
+
+
+def html_texto(url: str) -> str | None:
+    r = pedir(url)
+    if r is None:
+        return None
+    return r.content.decode("latin-1", errors="replace")
+
+
+class _TablaParser(HTMLParser):
+    """Extractor ligero de filas <tr><td>...</td></tr> sin depender de bs4."""
+
+    def __init__(self):
+        super().__init__()
+        self.filas: list[list[str]] = []
+        self._en_tr = False
+        self._en_td = False
+        self._fila: list[str] = []
+        self._celda: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        t = tag.lower()
+        if t == "tr":
+            self._en_tr = True
+            self._fila = []
+        elif t == "td" and self._en_tr:
+            self._en_td = True
+            self._celda = []
+        elif self._en_td:
+            attr_txt = " ".join(f'{k}="{v}"' for k, v in attrs if v is not None)
+            self._celda.append(f"<{tag} {attr_txt}>" if attr_txt else f"<{tag}>")
+
+    def handle_endtag(self, tag):
+        t = tag.lower()
+        if t == "td" and self._en_td:
+            self._en_td = False
+            self._fila.append("".join(self._celda))
+        elif t == "tr" and self._en_tr:
+            self._en_tr = False
+            if self._fila:
+                self.filas.append(self._fila)
+        elif self._en_td:
+            self._celda.append(f"</{tag}>")
+
+    def handle_data(self, data):
+        if self._en_td:
+            self._celda.append(data)
+
+    def handle_entityref(self, name):
+        if self._en_td:
+            self._celda.append(f"&{name};")
+
+    def handle_charref(self, name):
+        if self._en_td:
+            self._celda.append(f"&#{name};")
+
+
+def _extraer_filas_html(doc_html: str) -> list[list[str]]:
+    p = _TablaParser()
+    p.feed(doc_html)
+    return p.filas
+
+
+def _parsear_trabajos_html(doc_html: str, con_id: bool = False) -> list[dict]:
+    out = []
+    for celdas in _extraer_filas_html(doc_html):
+        if len(celdas) != 4:
+            continue
+        m_obra = re.search(r'<a[^>]+href=["\']FichaPelicula\.asp\?id=(\d+)[^"\']*["\'][^>]*>(.*?)</a>', celdas[1], re.I | re.S)
+        if not m_obra:
+            continue
+        m_orig = re.search(r'<a[^>]+href=["\']FichaActorOriginal[^"\']*["\'][^>]*>(.*?)</a>', celdas[0], re.I | re.S)
+        if m_orig:
+            orig = _limpiar_html(m_orig.group(1)).title()
+        else:
+            txt0 = _limpiar_html(celdas[0])
+            if not txt0 or txt0.lower() in _MARCAS_SIN_ORIGINAL or (txt0.startswith("(") and txt0.endswith(")")):
+                orig = ""
+            else:
+                orig = txt0.title()
+        anio_txt = _limpiar_html(celdas[3])
+        item = {
+            "obra": _limpiar_html(m_obra.group(2)),
+            "actor_original": orig,
+            "personaje": _limpiar_html(celdas[2]),
+            "anio": int(anio_txt) if anio_txt.isdigit() else None,
+        }
+        if con_id:
+            item["id"] = int(m_obra.group(1))
+        out.append(item)
+    return out
+
+
+def _muestras_html(doc_html: str) -> list[dict]:
+    muestras: dict[str, str] = {}
+    patron = re.compile(r'<a[^>]+href=["\']((?:%s)/\d+\.mp3)["\'][^>]*>(.*?)</a>' % "|".join(CARPETAS_AUDIO), re.I | re.S)
+    for ruta, cuerpo in patron.findall(doc_html):
+        texto = _limpiar_html(cuerpo)
+        if texto or ruta not in muestras:
+            muestras[ruta] = texto
+    return [{"ruta": r, "titulo": t} for r, t in muestras.items()]
+
+
+def _nombre_html(doc_html: str, respaldo: str) -> str:
+    m = re.search(r"<title>(.*?)</title>", doc_html, re.I | re.S)
+    if m:
+        nombre = _limpiar_html(m.group(1)).split(" - Ficha")[0].strip()
+        if nombre:
+            return nombre
+    return respaldo
+
 ACTORES = RAIZ / "data" / "actores"
 LISTA = RAIZ / "data" / "eldoblaje_lista.json"
 
@@ -55,16 +187,49 @@ def pedir(url: str) -> requests.Response | None:
     return None
 
 
-def html(url: str) -> BeautifulSoup | None:
-    r = pedir(url)
-    if r is None:
+def html(url: str):
+    txt = html_texto(url)
+    if txt is None:
         return None
-    return BeautifulSoup(r.content.decode("latin-1"), "html.parser")
+    if BeautifulSoup is None:
+        return txt
+    return BeautifulSoup(txt, "html.parser")
+
+
+def nombre_de(sopa, respaldo: str) -> str:
+    if isinstance(sopa, str):
+        return _nombre_html(sopa, respaldo)
+    titulo = sopa.title.get_text(strip=True) if sopa.title else ""
+    nombre = titulo.split(" - Ficha")[0].strip()
+    return nombre or respaldo
+
+
+def _extraer_original(celda) -> str:
+    original = celda.find("a", href=re.compile(r"^FichaActorOriginal"))
+    if original is not None:
+        return original.get_text(" ", strip=True).title()
+    texto = re.sub(r"\s+", " ", celda.get_text(" ", strip=True)).strip()
+    if not texto or texto.lower() in _MARCAS_SIN_ORIGINAL or (texto.startswith("(") and texto.endswith(")")):
+        return ""
+    return texto.title()
 
 
 def slug(texto: str) -> str:
     t = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode().lower()
     return re.sub(r"[^a-z0-9]+", "-", t).strip("-")[:60]
+
+
+def _extraer_enlaces_actores(sopa) -> list[tuple[str, str]]:
+    if isinstance(sopa, str):
+        return [
+            (m.group(1), _limpiar_html(m.group(2)))
+            for m in re.finditer(r'<a[^>]+href=["\'](?:[^"\']*?)FichaActorDoblaje\.asp\?id=(\d+)[^"\']*["\'][^>]*>(.*?)</a>', sopa, re.I | re.S)
+        ]
+    return [
+        (re.search(r"id=(\d+)", a["href"]).group(1), a.get_text(" ", strip=True))
+        for a in sopa.select('a[href*="FichaActorDoblaje.asp?id="]')
+        if re.search(r"id=(\d+)", a["href"])
+    ]
 
 
 def listar():
@@ -75,8 +240,8 @@ def listar():
             sopa = html(f"{BASE}ListedResults.asp?letter={letra}&ocupacion=Doblaje&pag={pag}")
             if sopa is None:
                 break
-            for a in sopa.select('a[href^="FichaActorDoblaje.asp?id="]'):
-                actores[a["href"].split("id=")[1]] = a.get_text(strip=True)
+            for id_a, txt in _extraer_enlaces_actores(sopa):
+                actores[id_a] = txt
             paginas = [int(m) for m in re.findall(r"pag=(\d+)", str(sopa))]
             total = max(paginas, default=1)
             print(f"{letra} pág {pag}/{total}: {len(actores)} actores en total")
@@ -84,26 +249,23 @@ def listar():
         LISTA.write_text(json.dumps(actores, ensure_ascii=False, indent=0), encoding="utf-8")
 
 
-def nombre_de(sopa: BeautifulSoup, respaldo: str) -> str:
-    titulo = sopa.title.get_text(strip=True) if sopa.title else ""
-    nombre = titulo.split(" - Ficha")[0].strip()
-    return nombre or respaldo
-
-
-def trabajos_de(sopa: BeautifulSoup) -> list[dict]:
+def trabajos_de(sopa) -> list[dict]:
+    if isinstance(sopa, str):
+        trabajos = _parsear_trabajos_html(sopa, con_id=False)
+        trabajos.sort(key=lambda t: t["anio"] or 0, reverse=True)
+        return trabajos
     trabajos = []
     for fila in sopa.find_all("tr"):
         celdas = fila.find_all("td", recursive=False)
         if len(celdas) != 4:
             continue
-        original = celdas[0].find("a", href=re.compile(r"^FichaActorOriginal"))
         obra = celdas[1].find("a", href=re.compile(r"^FichaPelicula"))
-        if not (original and obra):
+        if not obra:
             continue
         anio = celdas[3].get_text(strip=True)
         trabajos.append({
             "obra": obra.get_text(" ", strip=True),
-            "actor_original": original.get_text(" ", strip=True).title(),
+            "actor_original": _extraer_original(celdas[0]),
             "personaje": celdas[2].get_text(" ", strip=True),
             "anio": int(anio) if anio.isdigit() else None,
         })
@@ -111,7 +273,9 @@ def trabajos_de(sopa: BeautifulSoup) -> list[dict]:
     return trabajos
 
 
-def muestras_de(sopa: BeautifulSoup) -> list[dict]:
+def muestras_de(sopa) -> list[dict]:
+    if isinstance(sopa, str):
+        return _muestras_html(sopa)
     muestras = {}
     for a in sopa.find_all("a", href=re.compile(r"^(%s)/\d+\.mp3$" % "|".join(CARPETAS_AUDIO))):
         texto = a.get_text(" ", strip=True)
@@ -140,7 +304,7 @@ def ficha(id_: str, nombre_lista: str, sin_audio: bool = False) -> str:
             if r is not None and r.headers.get("content-type", "").startswith("audio"):
                 destino.write_bytes(r.content)
 
-    tiene_foto = sopa.find("img", src=f"FotosActores/{id_}.jpg") is not None
+    tiene_foto = f"FotosActores/{id_}.jpg" in sopa if isinstance(sopa, str) else (sopa.find("img", src=f"FotosActores/{id_}.jpg") is not None)
     if tiene_foto:
         descargar_foto(id_, carpeta)
     trabajos = trabajos_de(sopa)
@@ -150,10 +314,8 @@ def ficha(id_: str, nombre_lista: str, sin_audio: bool = False) -> str:
         "url": f"https://www.eldoblaje.com/datos/FichaActorDoblaje.asp?id={id_}",
         "foto": f"https://www.eldoblaje.com/datos/FotosActores/{id_}.jpg" if tiene_foto else "",
         "muestras": [m["titulo"] for m in muestras],
-        "trabajos": [
-            f"{t['personaje'] or t['actor_original']} en {t['obra']}" + (f" ({t['anio']})" if t["anio"] else "")
-            for t in trabajos[:MAX_TRABAJOS]
-        ],
+        "muestra": muestras[0]["ruta"] if muestras else "",
+        "trabajos": elegir_trabajos_destacados(trabajos, max_trabajos=MAX_TRABAJOS),
         "num_trabajos": len(trabajos),
     }
     (carpeta / "ficha.json").write_text(json.dumps(datos, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -181,26 +343,120 @@ def fotos():
         print(f"[{n}/{len(pendientes)}] {carpeta.name}")
 
 
-def trabajos_de_obra(sopa: BeautifulSoup) -> list[dict]:
+def trabajos_de_obra(sopa) -> list[dict]:
     """Como trabajos_de, pero guardando también el id de la obra en eldoblaje."""
+    if isinstance(sopa, str):
+        return _parsear_trabajos_html(sopa, con_id=True)
     out = []
     for fila in sopa.find_all("tr"):
         celdas = fila.find_all("td", recursive=False)
         if len(celdas) != 4:
             continue
-        original = celdas[0].find("a", href=re.compile(r"^FichaActorOriginal"))
         obra = celdas[1].find("a", href=re.compile(r"^FichaPelicula"))
-        if not (original and obra):
+        if not obra:
             continue
         anio = celdas[3].get_text(strip=True)
         out.append({
             "id": int(obra["href"].split("id=")[1].split("&")[0]),
             "obra": obra.get_text(" ", strip=True),
-            "actor_original": original.get_text(" ", strip=True).title(),
+            "actor_original": _extraer_original(celdas[0]),
             "personaje": celdas[2].get_text(" ", strip=True),
             "anio": int(anio) if anio.isdigit() else None,
         })
     return out
+
+
+def descargar_trabajos_actor_id(id_: str, max_paginas: int = 120) -> list[dict]:
+    """Descarga todas las páginas de filmografía de un actor por su id de eldoblaje."""
+    todos, pag, total = [], 1, 1
+    while pag <= total and pag <= max_paginas:
+        sopa = html(f"{BASE}FichaActorDoblaje.asp?id={id_}&pag={pag}&orden=")
+        if sopa is None:
+            break
+        todos += trabajos_de_obra(sopa)
+        paginas = [int(m) for m in re.findall(rf"FichaActorDoblaje\.asp\?id={id_}&(?:amp;)?pag=(\d+)", str(sopa))]
+        total = max(paginas, default=1)
+        pag += 1
+    return todos
+
+
+def obtener_ficha_web(id_: str, nombre_respaldo: str = "", descargar_todos_trabajos: bool = True) -> dict | None:
+    """Obtiene ficha completa (nombre, foto, muestras, trabajos completos) de eldoblaje.com sin guardar clips."""
+    doc = html_texto(f"{BASE}FichaActorDoblaje.asp?id={id_}")
+    if doc is None:
+        return None
+    nombre = _nombre_html(doc, nombre_respaldo)
+    muestras = _muestras_html(doc)
+    tiene_foto = f"FotosActores/{id_}.jpg" in doc
+    trabajos = _parsear_trabajos_html(doc, con_id=True)
+    paginas = [int(m) for m in re.findall(rf"FichaActorDoblaje\.asp\?id={id_}&(?:amp;)?pag=(\d+)", doc)]
+    total_pags = max(paginas, default=1)
+    if descargar_todos_trabajos and total_pags > 1:
+        for pag in range(2, min(total_pags, 120) + 1):
+            doc_p = html_texto(f"{BASE}FichaActorDoblaje.asp?id={id_}&pag={pag}&orden=")
+            if doc_p is None:
+                break
+            trabajos += _parsear_trabajos_html(doc_p, con_id=True)
+    return {
+        "id": f"{id_}-{slug(nombre)}",
+        "id_eldoblaje": int(id_),
+        "nombre": nombre,
+        "foto_url": f"{BASE}FotosActores/{id_}.jpg" if tiene_foto else "",
+        "muestras": muestras,
+        "trabajos_completos": trabajos,
+    }
+
+
+def descubrir_buscavoces(max_paginas: int = 10) -> list[str]:
+    """Devuelve los IDs de actores con Ficha Extendida en buscavoces_results.asp."""
+    ids, vistos = [], set()
+    for pag in range(1, max_paginas + 1):
+        sopa = html(f"{BASE}buscavoces_results.asp?pag={pag}")
+        if sopa is None:
+            break
+        nuevos_en_pag = 0
+        for id_a, _ in _extraer_enlaces_actores(sopa):
+            if id_a not in vistos:
+                vistos.add(id_a)
+                ids.append(id_a)
+                nuevos_en_pag += 1
+        pags = [int(x) for x in re.findall(r"pag=(\d+)", str(sopa))]
+        if pag >= max(pags, default=1) or nuevos_en_pag == 0:
+            break
+    return ids
+
+
+def buscar_actor_por_nombre(nombre: str) -> tuple[str, str] | None:
+    """Busca un actor en eldoblaje.com por nombre completo y devuelve `(id, nombre_oficial)`."""
+    def _plano(t: str) -> str:
+        s = unicodedata.normalize("NFKD", t or "").encode("ascii", "ignore").decode().lower()
+        return re.sub(r"[^a-z0-9]+", " ", s).strip()
+
+    objetivo = _plano(nombre)
+    partes = objetivo.split()
+    if not partes:
+        return None
+    # En eldoblaje se lista por apellido ("APELLIDO, NOMBRE")
+    letras_prueba = [partes[-1][0], partes[0][0]]
+    vistas = set()
+    for letra in letras_prueba:
+        if letra in vistas or letra not in LETRAS:
+            continue
+        vistas.add(letra)
+        pag, total = 1, 1
+        while pag <= total:
+            sopa = html(f"{BASE}ListedResults.asp?letter={quote_plus(letra)}&ocupacion=Doblaje&pag={pag}")
+            if sopa is None:
+                break
+            for id_a, txt in _extraer_enlaces_actores(sopa):
+                ap, _, no = txt.partition(",")
+                nombre_fmt = f"{no.strip()} {ap.strip()}".strip() if "," in txt else txt
+                if _plano(nombre_fmt) == objetivo or _plano(txt) == objetivo:
+                    return id_a, nombre_fmt
+            paginas = [int(m) for m in re.findall(r"pag=(\d+)", str(sopa))]
+            total = max(paginas, default=1)
+            pag += 1
+    return None
 
 
 def trabajos(hilos: int = 2):
@@ -246,7 +502,7 @@ def contar():
             return id_, None
         filas = len(trabajos_de(sopa))
         paginas = max([int(m) for m in re.findall(rf"FichaActorDoblaje\.asp\?id={id_}&(?:amp;)?pag=(\d+)", str(sopa))], default=1)
-        foto = sopa.find("img", src=f"FotosActores/{id_}.jpg") is not None
+        foto = f"FotosActores/{id_}.jpg" in sopa if isinstance(sopa, str) else (sopa.find("img", src=f"FotosActores/{id_}.jpg") is not None)
         return id_, {"nombre": nombre_de(sopa, actores.get(id_, "")), "paginas": paginas, "filas": filas, "foto": foto}
 
     with ThreadPoolExecutor(2) as ex:

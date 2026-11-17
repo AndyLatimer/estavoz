@@ -201,6 +201,38 @@ class DetectorVoz:
         )
 
 
+def concatenar_segmentos_suave(
+    audio: np.ndarray,
+    segmentos: Sequence[SegmentoVoz],
+    sr: int = 16000,
+    fade_ms: float = 10.0,
+) -> np.ndarray:
+    """Concatena segmentos de voz aplicando un fundido cruzado breve para evitar clics espectrales."""
+    if not segmentos:
+        return np.asarray(audio, dtype=np.float32)
+    if len(segmentos) == 1:
+        s = segmentos[0]
+        return np.asarray(audio[s.inicio_muestra : s.fin_muestra], dtype=np.float32)
+
+    fade = max(0, int(sr * fade_ms / 1000.0))
+    trozos = [np.asarray(audio[s.inicio_muestra : s.fin_muestra], dtype=np.float32).copy() for s in segmentos]
+    if fade <= 1:
+        return np.concatenate(trozos)
+
+    out_partes: list[np.ndarray] = []
+    for idx, t in enumerate(trozos):
+        n = len(t)
+        f = min(fade, n // 4)
+        if f > 0:
+            rampa = np.linspace(0.0, 1.0, f, dtype=np.float32)
+            if idx > 0:
+                t[:f] *= rampa
+            if idx < len(trozos) - 1:
+                t[-f:] *= (1.0 - rampa)
+        out_partes.append(t)
+    return np.concatenate(out_partes)
+
+
 def aislar_voz_continua(audio: np.ndarray, vad: ResultadoVAD | None = None, sr: int = 16000) -> np.ndarray:
     """Extrae y concatena exclusivamente los tramos de voz activa eliminando silencios y ruido."""
     if vad is None:
@@ -208,8 +240,7 @@ def aislar_voz_continua(audio: np.ndarray, vad: ResultadoVAD | None = None, sr: 
         vad = detector.analizar(audio)
     if not vad.segmentos:
         return audio
-    trozos = [audio[s.inicio_muestra : s.fin_muestra] for s in vad.segmentos]
-    return np.concatenate(trozos)
+    return concatenar_segmentos_suave(audio, vad.segmentos, sr=sr)
 
 
 def segmentar_intervenciones(
@@ -256,11 +287,6 @@ def segmentar_intervenciones(
         bloque_actual.append(trozo)
         muestras_bloque += len(trozo)
         seg_anterior = seg
-
-    if muestras_bloque >= muestras_min:
-        turnos.append(np.concatenate(bloque_actual))
-
-    return turnos if turnos else [audio]
 
     if muestras_bloque >= muestras_min:
         turnos.append(np.concatenate(bloque_actual))

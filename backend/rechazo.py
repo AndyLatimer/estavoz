@@ -85,20 +85,20 @@ class UmbralesRechazo:
         )
 
 
-# Umbrales calibrados empíricamente sobre las 22.946 huellas reales de 836 actores
-# con VoxBlink2 SimAM-ResNet100 (VERSION_MODELO = "3"), logrando 99,1 % de precisión
-# en identificaciones fiables y 95,0 % de rechazo/duda en voces desconocidas.
+# Umbrales calibrados empíricamente sobre 844 actores independientes (AS-Norm k=50, top-4 trozos)
+# con VoxBlink2 SimAM-ResNet100 (VERSION_MODELO = "3"), logrando ~99,4 % de precisión en
+# identificaciones fiables y 96,3 % de rechazo/duda en voces desconocidas.
 UMBRALES_VOXBLINK_R100_CALIBRADOS = UmbralesRechazo(
-    umbral_fiable=0.3663,
-    umbral_dudoso=0.2520,
-    margen_fiable=0.1115,
-    margen_dudoso=0.0502,
-    z_fiable=5.3001,
+    umbral_fiable=0.5087,
+    umbral_dudoso=0.4756,
+    margen_fiable=0.1438,
+    margen_dudoso=0.0647,
+    z_fiable=5.3457,
     descuento_contexto_max=0.035,
-    umbral_1a1_fiable=0.3370,
-    umbral_1a1_dudoso=0.2319,
+    umbral_1a1_fiable=0.4756,
+    umbral_1a1_dudoso=0.4376,
     beta_exceso_trozos=0.012,
-    origen_calibracion="voxblink2_r100_836_actores",
+    origen_calibracion="voxblink2_r100_asnorm_844_actores",
 )
 
 
@@ -131,19 +131,18 @@ class MuestraValidacionRechazo:
     con_contexto: bool = False
 
 
-# Nodos empíricos (similitud, porcentaje) calibrados sobre las 3.373 consultas reales
-# (conocidas + desconocidas) del modelo VoxBlink2 SimAM-ResNet100 (VERSION_MODELO = "3").
-# Reduce el ECE de 0.0809 (fórmula lineal antigua) a 0.0103 (-87,3 %).
+# Nodos empíricos (similitud AS-Norm, porcentaje) calibrados sobre 3.419 consultas independientes
+# (conocidas + desconocidas) del modelo VoxBlink2 SimAM-ResNet100 (VERSION_MODELO = "3", ECE = 0.0124).
 CURVA_CALIBRADA_R100: tuple[tuple[float, float], ...] = (
-    (0.15, 0.0),
-    (0.22, 19.0),
-    (0.28, 28.0),
-    (0.33, 33.0),
-    (0.37, 47.0),
-    (0.42, 64.0),
-    (0.48, 86.0),
-    (0.54, 95.0),
-    (0.60, 100.0),
+    (0.25, 0.0),
+    (0.35, 14.0),
+    (0.42, 21.0),
+    (0.47, 30.0),
+    (0.52, 46.0),
+    (0.58, 65.0),
+    (0.66, 86.0),
+    (0.74, 96.0),
+    (0.85, 100.0),
 )
 
 
@@ -213,6 +212,51 @@ def extraer_senales(
         n_galeria_total=n_total,
         con_contexto=con_contexto,
     )
+
+
+def calcular_estadisticas_cohorte(centroides: np.ndarray, k: int = 50) -> tuple[np.ndarray, np.ndarray]:
+    """Calcula `(mu_a, sd_a)` por actor sobre sus `k` vecinos más cercanos en la galería (sin fuga)."""
+    C = np.asarray(centroides, dtype=np.float64)
+    n = len(C)
+    if n <= 1:
+        return np.zeros(n, dtype=np.float32), np.ones(n, dtype=np.float32)
+    normas = np.linalg.norm(C, axis=1, keepdims=True)
+    Cn = np.where(normas > 0, C / np.maximum(normas, 1e-12), 0.0)
+    CC = Cn @ Cn.T
+    np.fill_diagonal(CC, -np.inf)
+    k_eff = min(max(1, int(k)), n - 1)
+    top = -np.sort(-CC, axis=1)[:, :k_eff]
+    mu_a = top.mean(axis=1).astype(np.float32)
+    sd_a = np.maximum(top.std(axis=1), 1e-4).astype(np.float32)
+    return mu_a, sd_a
+
+
+def aplicar_as_norm(
+    puntuaciones: np.ndarray,
+    mu_a: np.ndarray | None = None,
+    sd_a: np.ndarray | None = None,
+    k: int = 50,
+    peso: float = 0.04,
+) -> np.ndarray:
+    """Combina similitud coseno con AS-Norm adaptativo para atenuar actores imán (hubness)."""
+    s = np.asarray(puntuaciones, dtype=np.float32)
+    if peso <= 0 or len(s) < 4:
+        return s
+    validos = np.isfinite(s)
+    if validos.sum() < 4:
+        return s
+    orden = np.sort(s[validos])[::-1]
+    k_eff = min(max(2, int(k)), len(orden) - 1)
+    coh_q = orden[1 : k_eff + 1]
+    mu_q = float(coh_q.mean())
+    sd_q = max(float(coh_q.std()), 1e-4)
+    z_q = (s - mu_q) / sd_q
+    if mu_a is not None and sd_a is not None and len(mu_a) == len(s):
+        z_a = (s - mu_a) / np.maximum(sd_a, 1e-4)
+        as_val = 0.5 * (z_q + z_a)
+    else:
+        as_val = z_q
+    return np.where(validos, s + float(peso) * as_val, s).astype(np.float32)
 
 
 def _descuento_contextual(n_candidatos: int, n_total: int, max_descuento: float) -> float:

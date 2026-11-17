@@ -11,6 +11,8 @@ create table if not exists respuestas (
   version    text
 );
 
+create index if not exists idx_respuestas_version_id on respuestas (version, id);
+
 alter table respuestas enable row level security;
 
 -- La web (clave pública "anon") solo puede AÑADIR respuestas, con límites de tamaño.
