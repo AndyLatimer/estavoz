@@ -267,3 +267,74 @@ def test_aprender_descarga_paginada_compatible_con_columnas_nuevas(monkeypatch):
     assert llamadas[0][0] == "https://demo.supabase.co/rest/v1/respuestas"
     assert llamadas[0][2]["select"] == "*"
     assert llamadas[1][1]["Range"] == "1000-1999"
+
+
+def test_ampliaciones_persistentes_e_idempotentes_en_exportar_web(tmp_path: Path):
+    """Comprueba guardar/recargar `ampliaciones.npz` e integrarlas sin duplicados en `exportar_web.cargar_con_ampliaciones`."""
+    from incorporar_voces import _registrar_ampliacion, cargar_ampliaciones, guardar_ampliaciones
+
+    if str(RAIZ / "despliegue") not in sys.path:
+        sys.path.insert(0, str(RAIZ / "despliegue"))
+    from exportar_web import VERSION_MODELO, cargar_con_ampliaciones
+
+    dim = 256
+    rng = np.random.default_rng(123)
+    v_base = rng.normal(size=(2, dim)).astype(np.float32)
+    np.savez(
+        tmp_path / "indice.npz",
+        vectores=v_base,
+        etiquetas=np.array(["10-actor-base", "10-actor-base"]),
+        clips=np.array(["Muestras/10.mp3", "Muestras/10.mp3#movil"]),
+        modelo_version=np.array(VERSION_MODELO),
+    )
+    (tmp_path / "fichas.json").write_text(
+        json.dumps({"10-actor-base": {"id": "10-actor-base", "nombre": "Actor Base", "trabajos": ["Obra 1"], "num_trabajos": 1}}),
+        encoding="utf-8",
+    )
+
+    ruta_npz = tmp_path / "ampliaciones.npz"
+    ruta_fichas = tmp_path / "ampliaciones_fichas.json"
+    actores_dir = tmp_path / "actores"
+    amp = cargar_ampliaciones(ruta_npz=ruta_npz, ruta_fichas=ruta_fichas)
+
+    v_ext = rng.normal(size=(2, dim)).astype(np.float32)
+    _registrar_ampliacion(
+        amp,
+        "20-actor-nuevo",
+        v_ext,
+        ["podcasts/20-actor-nuevo/voz_a.wav", "podcasts/20-actor-nuevo/voz_a.wav#movil"],
+        actor_obj={"id": "20-actor-nuevo", "nombre": "Actor Nuevo", "trabajos": ["Peli X"], "num_trabajos": 12, "f0": 115.0},
+        trabajos_completos=[{"obra": "Peli X", "personaje": "Prota", "anio": "2024", "actor_original": "Smith, John"}],
+        foto_bytes=b"JPGFAKE",
+        actores_dir=actores_dir,
+    )
+    # Registro duplicado + refuerzo al actor base
+    _registrar_ampliacion(
+        amp,
+        "20-actor-nuevo",
+        v_ext,
+        ["podcasts/20-actor-nuevo/voz_a.wav", "podcasts/20-actor-nuevo/voz_a.wav#movil"],
+        actores_dir=actores_dir,
+    )
+    v_ref = rng.normal(size=(1, dim)).astype(np.float32)
+    _registrar_ampliacion(
+        amp,
+        "10-actor-base",
+        v_ref,
+        ["Saludos/10.mp3"],
+        actor_obj={"id": "10-actor-base", "nombre": "Actor Base", "muestra": "Saludos/10.mp3", "f0": 112.0},
+        actores_dir=actores_dir,
+    )
+
+    res_save = guardar_ampliaciones(amp, ruta_npz=ruta_npz, ruta_fichas=ruta_fichas, dim=dim)
+    assert res_save == {"trozos_crudos": 3, "actores_ampliados": 2}
+    assert (actores_dir / "20-actor-nuevo" / "foto.jpg").read_bytes() == b"JPGFAKE"
+    assert json.loads((actores_dir / "20-actor-nuevo" / "trabajos.json").read_text(encoding="utf-8"))[0]["obra"] == "Peli X"
+
+    X, y, clips, fichas, n_amp = cargar_con_ampliaciones(tmp_path)
+    assert len(X) == 5 and n_amp == 3
+    assert set(y.tolist()) == {"10-actor-base", "20-actor-nuevo"}
+    assert "Saludos/10.mp3" in clips.tolist()
+    assert fichas["10-actor-base"]["muestra"] == "Saludos/10.mp3"
+    assert fichas["10-actor-base"]["f0"] == 112.0
+    assert fichas["20-actor-nuevo"]["num_trabajos"] == 12

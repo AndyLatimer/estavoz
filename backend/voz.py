@@ -73,10 +73,43 @@ def _a_mono_16k(audio: np.ndarray, sr_origen: int, max_seg: int | None = None) -
     return audio
 
 
+def _decodificar_con_ffmpeg(ruta_entrada: str | Path, separar: bool = False, max_seg: int | None = None) -> np.ndarray:
+    """Decodifica cualquier archivo de audio/vídeo con ffmpeg a float32."""
+    canales, frecuencia = ("2", "44100") if separar else ("1", str(SAMPLE_RATE))
+    limite = ["-t", str(max_seg)] if max_seg else []
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp_name = tmp.name
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-i", str(ruta_entrada), *limite,
+             "-ac", canales, "-ar", frecuencia, tmp_name],
+            check=True,
+        )
+        audio, _ = sf.read(tmp_name, dtype="float32")
+    finally:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+    return solo_voz(audio) if separar else audio
+
+
 def cargar_audio_bytes(datos: bytes, max_seg: int | None = None) -> np.ndarray:
-    """Decodifica bytes de audio (MP3, WAV, FLAC, OGG...) directamente a 16 kHz mono float32."""
-    audio, sr_origen = sf.read(io.BytesIO(datos), dtype="float32")
-    return _a_mono_16k(audio, sr_origen, max_seg=max_seg)
+    """Decodifica bytes de audio (MP3, WAV, FLAC, OGG, M4A...) a 16 kHz mono float32."""
+    try:
+        audio, sr_origen = sf.read(io.BytesIO(datos), dtype="float32")
+        return _a_mono_16k(audio, sr_origen, max_seg=max_seg)
+    except Exception:
+        with tempfile.NamedTemporaryFile(suffix=".audio", delete=False) as tmp_in:
+            tmp_in.write(datos)
+            tmp_in_name = tmp_in.name
+        try:
+            return _decodificar_con_ffmpeg(tmp_in_name, separar=False, max_seg=max_seg)
+        finally:
+            try:
+                os.unlink(tmp_in_name)
+            except OSError:
+                pass
 
 
 def cargar_audio(ruta: str | Path, separar: bool = False, max_seg: int | None = None) -> np.ndarray:
@@ -85,8 +118,6 @@ def cargar_audio(ruta: str | Path, separar: bool = False, max_seg: int | None = 
     separar=True quita antes la música y los efectos (más lento).
     """
     ruta = Path(ruta)
-    canales, frecuencia = ("2", "44100") if separar else ("1", str(SAMPLE_RATE))
-    limite = ["-t", str(max_seg)] if max_seg else []
 
     # 1. Intentar decodificación directa con soundfile (WAV, FLAC, OGG, MP3...) sin requerir ffmpeg externo
     if not separar:
@@ -97,22 +128,7 @@ def cargar_audio(ruta: str | Path, separar: bool = False, max_seg: int | None = 
             pass
 
     # 2. Si requiere demuxing/conversión (mp3, webm, mp4...) o separación demucs, usar ffmpeg
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        tmp_name = tmp.name
-    try:
-        subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error", "-i", str(ruta), *limite,
-             "-ac", canales, "-ar", frecuencia, tmp_name],
-            check=True,
-        )
-        audio, _ = sf.read(tmp_name, dtype="float32")
-    finally:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-
-    return solo_voz(audio) if separar else audio
+    return _decodificar_con_ffmpeg(ruta, separar=separar, max_seg=max_seg)
 
 
 def trozos(audio: np.ndarray, filtrar_silencio: bool = False) -> list[np.ndarray]:

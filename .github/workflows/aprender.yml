@@ -49,10 +49,15 @@ jobs:
 
       - name: Rehacer los datos de la web, incorporar fuentes curadas y validar
         env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
           ESTAVOZ_ONNX: frontend/modelo/voxblink-int8.onnx
         run: |
           python despliegue/exportar_web.py
           python backend/incorporar_voces.py --curados
+          if [ -f data/ampliaciones.npz ]; then
+            python despliegue/copia_datos.py "${{ vars.HF_DATOS }}" subir-web
+            python despliegue/exportar_web.py
+          fi
           pytest -q tests/test_app.py tests/test_rechazo.py tests/test_frontend.py tests/test_metadatos_modelo.py
 
       - name: Publicar en Hugging Face Spaces

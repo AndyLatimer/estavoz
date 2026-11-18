@@ -1,0 +1,77 @@
+# Ampliación profunda de catálogo (más voces limpias, referentes de podcasts y muestras extra):
+# descarga el índice base + ampliaciones previas desde HF_DATOS, incorpora voces nuevas y refuerzos
+# desde eldoblaje.com + podcasts de doblaje en español (con VAD, separación de presentadores y aumento acústico),
+# persiste las huellas crudas en `data/ampliaciones.npz` -> `HF_DATOS`, reentrena LDA reg=1.25 sobre todo
+# el catálogo ampliado, valida los tests y publica la nueva versión en `HF_SPACE`.
+
+name: Ampliar catálogo de voces
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_refuerzo:
+        description: "Máximo de actores existentes a reforzar por fuente"
+        required: false
+        default: "120"
+      max_nuevos:
+        description: "Máximo de dobladores nuevos por fuente"
+        required: false
+        default: "80"
+
+jobs:
+  ampliar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar ffmpeg si falta
+        run: |
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          fi
+          ffmpeg -version | head -n 2
+
+      - name: Instalar dependencias
+        run: pip install numpy scipy requests huggingface_hub onnxruntime soundfile beautifulsoup4 pytest fastapi httpx python-multipart onnx
+
+      - name: Verificar módulos antes de construir
+        run: pytest -q --ignore=tests/test_app.py
+
+      - name: Bajar índice base, ampliaciones previas y modelo ONNX
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python despliegue/copia_datos.py "${{ vars.HF_DATOS }}" bajar-web
+          python -c "from huggingface_hub import hf_hub_download as d; import os, shutil; os.makedirs('frontend/modelo', exist_ok=True); shutil.copy(d('${{ vars.HF_SPACE }}', 'modelo/voxblink-int8.onnx', repo_type='space', token=os.environ['HF_TOKEN']), 'frontend/modelo/voxblink-int8.onnx')"
+
+      - name: Recoger respuestas ciudadanas de Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python backend/aprender.py
+
+      - name: Exportar estado inicial e incorporar voces nuevas y refuerzos limpios
+        env:
+          ESTAVOZ_ONNX: frontend/modelo/voxblink-int8.onnx
+        run: |
+          python despliegue/exportar_web.py
+          python backend/incorporar_voces.py --todo --max-refuerzo "${{ inputs.max_refuerzo || '120' }}" --max-nuevos "${{ inputs.max_nuevos || '80' }}"
+
+      - name: Persistir ampliaciones en dataset privado y reexportar con LDA completo
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          ESTAVOZ_ONNX: frontend/modelo/voxblink-int8.onnx
+        run: |
+          python despliegue/copia_datos.py "${{ vars.HF_DATOS }}" subir-web
+          python despliegue/exportar_web.py
+          pytest -q tests/test_app.py tests/test_rechazo.py tests/test_frontend.py tests/test_metadatos_modelo.py tests/test_mejoras_voz_y_filmografia.py tests/test_sistema_evaluacion.py
+
+      - name: Publicar web ampliada en Hugging Face Spaces
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: python despliegue/subir_a_huggingface.py "${{ vars.HF_SPACE }}"

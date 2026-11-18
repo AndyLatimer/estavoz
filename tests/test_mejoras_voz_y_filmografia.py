@@ -145,11 +145,37 @@ def test_as_norm_mejora_discriminacion_contra_imanes():
     assert (norm[1] - norm[0]) > (brutas[1] - brutas[0])
 
 
-def test_incorporar_voces_poda_intrusos_y_alias():
-    from incorporar_voces import _claves_nombre_actor, podar_intrusos_estado
+def test_incorporar_voces_poda_intrusos_y_alias(monkeypatch):
+    import voz
+    from incorporar_voces import _claves_nombre_actor, _es_entrevista_solitaria, podar_intrusos_estado
 
     assert "lluis posada" in _claves_nombre_actor("Luis Posada")
     assert "ricard solans" in _claves_nombre_actor("Ricardo Solans")
+    assert "pere molina" in _claves_nombre_actor("Pedro Molina")
+    assert "sergi zamora" in _claves_nombre_actor("Sergio Zamora")
+    assert "joan carles gustems" in _claves_nombre_actor("Juan Carlos Gustems")
+    assert "albert trifol" in _claves_nombre_actor("Alberto Trifol")
+    assert "m jesus lleonart" in _claves_nombre_actor("María Jesús Lleonart")
+    assert "francisco javier garcia saenz" in _claves_nombre_actor("Javier García-Sáenz")
+    assert "fer delgado" in _claves_nombre_actor("Fernando (fer) Delgado")
+    assert "fernando delgado" in _claves_nombre_actor("Fernando (fer) Delgado")
+    assert "rafa calvo" in _claves_nombre_actor("Rafael Calvo")
+    assert "gaby jimenez" in _claves_nombre_actor("Gabriel Jiménez")
+    assert "mercedes montala" in _claves_nombre_actor("Mercè Montalà")
+
+    assert _es_entrevista_solitaria("109. Especial Wicked, con Sara Heras", "sara heras") is True
+    assert _es_entrevista_solitaria("Oliver y Benji. Entrevista a Jorge Saudinos", "jorge saudinos") is True
+    assert _es_entrevista_solitaria("Charleta con PABLO DOMÍNGUEZ LAGARES", "pablo dominguez lagares") is True
+    assert _es_entrevista_solitaria("T3xC19, amb Carles Lladó i Josep Maria Mas", "carles llado") is False
+    assert _es_entrevista_solitaria("108. Especial Bluey, con Lucía Pérez y Daniela Portugués", "lucia perez") is False
+
+    # Fallback a ffmpeg cuando soundfile.read no puede decodificar un contenedor alternativo (p. ej. m4a)
+    llamadas_ff = []
+    esperado = np.ones(160, dtype=np.float32) * 0.25
+    monkeypatch.setattr(voz, "_decodificar_con_ffmpeg", lambda ruta, separar=False, max_seg=None: (llamadas_ff.append(ruta), esperado)[1])
+    out_fb = cargar_audio_bytes(b"NO_ES_WAV_NI_MP3_M4A_FAKE")
+    assert len(llamadas_ff) == 1
+    assert np.allclose(out_fb, esperado)
 
     dim = 16
     c0 = np.eye(1, dim, 0, dtype=np.float32)[0]

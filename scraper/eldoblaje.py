@@ -426,6 +426,24 @@ def descubrir_buscavoces(max_paginas: int = 10) -> list[str]:
     return ids
 
 
+_CACHE_LISTED_PAGS: dict[tuple[str, int], tuple[list[tuple[str, str]], int]] = {}
+
+
+def _pagina_listed(letra: str, pag: int) -> tuple[list[tuple[str, str]], int] | None:
+    """Descarga y cachea en memoria una página de `ListedResults.asp`."""
+    clave = (letra, pag)
+    if clave in _CACHE_LISTED_PAGS:
+        return _CACHE_LISTED_PAGS[clave]
+    sopa = html(f"{BASE}ListedResults.asp?letter={quote_plus(letra)}&ocupacion=Doblaje&pag={pag}")
+    if sopa is None:
+        return None
+    enlaces = _extraer_enlaces_actores(sopa)
+    paginas = [int(m) for m in re.findall(r"pag=(\d+)", str(sopa))]
+    total = max(paginas, default=1)
+    _CACHE_LISTED_PAGS[clave] = (enlaces, total)
+    return enlaces, total
+
+
 def buscar_actor_por_nombre(nombre: str) -> tuple[str, str] | None:
     """Busca un actor en eldoblaje.com por nombre completo y devuelve `(id, nombre_oficial)`."""
     def _plano(t: str) -> str:
@@ -436,8 +454,18 @@ def buscar_actor_por_nombre(nombre: str) -> tuple[str, str] | None:
     partes = objetivo.split()
     if not partes:
         return None
-    # En eldoblaje se lista por apellido ("APELLIDO, NOMBRE")
-    letras_prueba = [partes[-1][0], partes[0][0]]
+    tokens_orig = [t for t in re.split(r"\s+", (nombre or "").strip()) if t]
+    # En eldoblaje se lista por primer apellido ("APELLIDO, NOMBRE")
+    letras_prueba: list[str] = []
+    if len(tokens_orig) >= 2 and "-" in tokens_orig[-1]:
+        prim_ap = _plano(tokens_orig[-1].split("-")[0])
+        if prim_ap:
+            letras_prueba.append(prim_ap[0])
+    letras_prueba.append(partes[-1][0])
+    for tok in reversed(partes[1:-1]):
+        letras_prueba.append(tok[0])
+    letras_prueba.append(partes[0][0])
+
     vistas = set()
     for letra in letras_prueba:
         if letra in vistas or letra not in LETRAS:
@@ -445,16 +473,16 @@ def buscar_actor_por_nombre(nombre: str) -> tuple[str, str] | None:
         vistas.add(letra)
         pag, total = 1, 1
         while pag <= total:
-            sopa = html(f"{BASE}ListedResults.asp?letter={quote_plus(letra)}&ocupacion=Doblaje&pag={pag}")
-            if sopa is None:
+            res = _pagina_listed(letra, pag)
+            if res is None:
                 break
-            for id_a, txt in _extraer_enlaces_actores(sopa):
+            enlaces, total = res
+            for id_a, txt in enlaces:
                 ap, _, no = txt.partition(",")
                 nombre_fmt = f"{no.strip()} {ap.strip()}".strip() if "," in txt else txt
-                if _plano(nombre_fmt) == objetivo or _plano(txt) == objetivo:
+                sin_par = _plano(re.sub(r"\([^)]*\)", " ", nombre_fmt))
+                if objetivo in (_plano(nombre_fmt), _plano(txt), sin_par):
                     return id_a, nombre_fmt
-            paginas = [int(m) for m in re.findall(r"pag=(\d+)", str(sopa))]
-            total = max(paginas, default=1)
             pag += 1
     return None
 

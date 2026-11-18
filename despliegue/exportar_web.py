@@ -139,13 +139,70 @@ def centroides_mezcla(Xp, y, clips, slugs, peso_entrevistas=0.5, peso_respuestas
     return C / np.linalg.norm(C, axis=1, keepdims=True)
 
 
+def cargar_con_ampliaciones(
+    carpeta_data: Path | None = None,
+    info_onnx=None,
+    version_esperada: str = VERSION_MODELO,
+):
+    """Carga `indice.npz` + `fichas.json` y fusiona si existen `ampliaciones.npz` y `ampliaciones_fichas.json`."""
+    data_dir = Path(carpeta_data) if carpeta_data is not None else (RAIZ / "data")
+    datos = np.load(data_dir / "indice.npz")
+    validar_compatibilidad_indice(datos, info_modelo=info_onnx, version_esperada=version_esperada)
+    bloques_X = [np.asarray(datos["vectores"], dtype=np.float32)]
+    y_lista = [str(s) for s in datos["etiquetas"]]
+    clips_lista = [str(c) for c in datos["clips"]]
+    fichas = json.loads((data_dir / "fichas.json").read_text(encoding="utf-8"))
+
+    ruta_amp_npz = data_dir / "ampliaciones.npz"
+    n_amp = 0
+    if ruta_amp_npz.exists():
+        amp = np.load(ruta_amp_npz)
+        if len(amp["vectores"]) > 0:
+            validar_compatibilidad_indice(amp, info_modelo=info_onnx, version_esperada=version_esperada)
+            existentes = set(zip(y_lista, clips_lista))
+            y_amp = [str(s) for s in amp["etiquetas"]]
+            c_amp = [str(c) for c in amp["clips"]]
+            mascara = np.array([(s, c) not in existentes for s, c in zip(y_amp, c_amp)], dtype=bool)
+            if mascara.any():
+                bloques_X.append(np.asarray(amp["vectores"][mascara], dtype=np.float32))
+                for k in np.flatnonzero(mascara):
+                    y_lista.append(y_amp[k])
+                    clips_lista.append(c_amp[k])
+                n_amp = int(mascara.sum())
+
+    ruta_amp_fichas = data_dir / "ampliaciones_fichas.json"
+    if ruta_amp_fichas.exists():
+        amp_fichas = json.loads(ruta_amp_fichas.read_text(encoding="utf-8"))
+        for slug, f_ext in amp_fichas.items():
+            if slug not in fichas:
+                fichas[slug] = dict(f_ext)
+            else:
+                for clave in ("muestra", "f0", "resumen_tipos", "vozh"):
+                    if f_ext.get(clave) and not fichas[slug].get(clave):
+                        fichas[slug][clave] = f_ext[clave]
+                if len(f_ext.get("trabajos") or []) > len(fichas[slug].get("trabajos") or []):
+                    fichas[slug]["trabajos"] = f_ext["trabajos"]
+                    fichas[slug]["num_trabajos"] = max(
+                        int(f_ext.get("num_trabajos") or 0),
+                        int(fichas[slug].get("num_trabajos") or 0),
+                    )
+
+    actores_con_voz = set(y_lista)
+    for slug in actores_con_voz:
+        if slug not in fichas:
+            fichas[slug] = {"id": slug, "nombre": slug.split("-", 1)[-1].replace("-", " ").title()}
+    fichas = {s: v for s, v in fichas.items() if s in actores_con_voz}
+
+    X = np.vstack(bloques_X).astype(np.float32) if len(bloques_X) > 1 else bloques_X[0]
+    return X, np.asarray(y_lista), np.asarray(clips_lista), fichas, n_amp
+
+
 def main():
-    datos = np.load(RAIZ / "data" / "indice.npz")
     ruta_onnx = RAIZ / "frontend" / "modelo" / "voxblink-int8.onnx"
     info_onnx = inspeccionar_onnx(ruta_onnx) if ruta_onnx.exists() else info_por_version(VERSION_MODELO)
-    validar_compatibilidad_indice(datos, info_modelo=info_onnx, version_esperada=VERSION_MODELO)
-    X, y, clips = datos["vectores"], datos["etiquetas"], datos["clips"]
-    fichas = json.loads((RAIZ / "data" / "fichas.json").read_text(encoding="utf-8"))
+    X, y, clips, fichas, n_amp = cargar_con_ampliaciones(RAIZ / "data", info_onnx=info_onnx, version_esperada=VERSION_MODELO)
+    if n_amp:
+        print(f"Ampliaciones fusionadas antes de LDA: +{n_amp} trozos crudos, {len(fichas)} actores totales")
     slugs = sorted(fichas)
 
     # la LDA aprende de los actores con 2+ clips (misma voz en grabaciones distintas)
@@ -204,7 +261,8 @@ def main():
     C.astype("<f4").tofile(salida / "centroides.bin")
     orden = np.argsort(np.searchsorted(slugs, yt), kind="stable")
     V = proyectar(Xt[orden], mu, W)
-    escala = np.abs(V).max(1) / 127
+    escala = (np.abs(V).max(1) / 127).astype("<f4")
+    escala = np.where(escala > 0, escala, np.float32(1.0 / 127.0)).astype("<f4")
     inicio = np.searchsorted(np.searchsorted(slugs, yt[orden]), np.arange(len(slugs) + 1))
     with open(salida / "trozos.bin", "wb") as f:
         f.write(inicio.astype("<u4").tobytes())
