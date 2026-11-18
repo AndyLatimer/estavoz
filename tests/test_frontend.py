@@ -483,6 +483,8 @@ console.log(JSON.stringify(res.map(x => [x.tipo, x.texto])));
 
 def test_privacidad_y_manifest_actualizados():
     """Verifica coherencia de privacidad.html (256 dimensiones) y manifest.json."""
+    html = (FRONTEND / "index.html").read_text(encoding="utf-8")
+    assert "[hidden] { display: none !important; }" in html
     priv = (FRONTEND / "privacidad.html").read_text(encoding="utf-8")
     assert "192 números" not in priv
     assert "256 números" in priv
