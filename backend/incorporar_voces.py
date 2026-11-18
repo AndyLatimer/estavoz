@@ -53,7 +53,7 @@ from filmografia import (  # noqa: E402
     resumen_actor_desde_papeles,
 )
 from lda import normaliza, proyectar  # noqa: E402
-from metadatos_modelo import validar_artefactos_web  # noqa: E402
+from metadatos_modelo import info_por_version, validar_artefactos_web  # noqa: E402
 from simular_movil import movil as simular_movil_sintetico  # noqa: E402
 from voz import SAMPLE_RATE, cargar_audio_bytes, huellas, huella_trozo, info_modelo_actual  # noqa: E402
 
@@ -388,6 +388,8 @@ def guardar_ampliaciones(
         else np.zeros((0, dim), dtype=np.float32)
     )
     info = info_modelo_actual()
+    if V.shape[1] != info.dim_embedding:
+        info = info_por_version("3" if V.shape[1] == 256 else "1")
     np.savez_compressed(
         ruta_npz,
         vectores=V,

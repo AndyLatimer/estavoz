@@ -269,8 +269,9 @@ def test_aprender_descarga_paginada_compatible_con_columnas_nuevas(monkeypatch):
     assert llamadas[1][1]["Range"] == "1000-1999"
 
 
-def test_ampliaciones_persistentes_e_idempotentes_en_exportar_web(tmp_path: Path):
+def test_ampliaciones_persistentes_e_idempotentes_en_exportar_web(tmp_path: Path, monkeypatch):
     """Comprueba guardar/recargar `ampliaciones.npz` e integrarlas sin duplicados en `exportar_web.cargar_con_ampliaciones`."""
+    import voz
     from incorporar_voces import _registrar_ampliacion, cargar_ampliaciones, guardar_ampliaciones
 
     if str(RAIZ / "despliegue") not in sys.path:
@@ -326,7 +327,14 @@ def test_ampliaciones_persistentes_e_idempotentes_en_exportar_web(tmp_path: Path
         actores_dir=actores_dir,
     )
 
-    res_save = guardar_ampliaciones(amp, ruta_npz=ruta_npz, ruta_fichas=ruta_fichas, dim=dim)
+    # Simular entorno CI sin ONNX descargado todavía (no debe degradar dim=256 a modelo_version='1')
+    monkeypatch.setattr(voz, "ONNX", None)
+    voz.info_modelo_actual.cache_clear()
+    try:
+        res_save = guardar_ampliaciones(amp, ruta_npz=ruta_npz, ruta_fichas=ruta_fichas, dim=dim)
+    finally:
+        monkeypatch.undo()
+        voz.info_modelo_actual.cache_clear()
     assert res_save == {"trozos_crudos": 3, "actores_ampliados": 2}
     assert (actores_dir / "20-actor-nuevo" / "foto.jpg").read_bytes() == b"JPGFAKE"
     assert json.loads((actores_dir / "20-actor-nuevo" / "trabajos.json").read_text(encoding="utf-8"))[0]["obra"] == "Peli X"
