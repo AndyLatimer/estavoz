@@ -200,8 +200,168 @@ def test_estimar_f0_y_registro_vocal():
     assert clasificar_registro_vocal(150.0) == "medio"
     assert clasificar_registro_vocal(None) == "desconocido"
 
-    # Normalización de pico
+    # Normalización de pico estándar y rescate frente a pico impulsivo aislado
     sig_norm = normalizar_amplitud_pico(sig_grave, pico_objetivo=0.75)
     assert np.isclose(np.max(np.abs(sig_norm)), 0.75, atol=1e-3)
 
+    sig_debil = (0.08 * sig_grave / max(float(np.max(np.abs(sig_grave))), 1e-6)).astype(np.float32)
+    rms_lineal = float(np.sqrt(np.mean((sig_debil * 0.75) ** 2)))
+    sig_con_clic = sig_debil.copy()
+    sig_con_clic[100] = 1.0
+    sig_rescatada = normalizar_amplitud_pico(sig_con_clic, pico_objetivo=0.75)
+    assert np.isclose(np.max(np.abs(sig_rescatada)), 0.75, atol=1e-3)
+    rms_rescatada = float(np.sqrt(np.mean(np.delete(sig_rescatada, 100) ** 2)))
+    assert rms_rescatada >= 2.5 * rms_lineal
 
+
+def test_vad_espectral_acepta_voz_continua_y_rechaza_ruido_o_zumbido():
+    sr = 16000
+    t = np.arange(sr * 3, dtype=np.float32) / sr
+    detector = DetectorVoz(sr=sr, min_voz_util_seg=1.5)
+
+    # Voz continua sin pausas largas: p10 cercano a p50 pero banda vocal alta
+    voz_continua = (
+        0.35
+        * (0.7 + 0.3 * np.sin(2 * np.pi * 4.0 * t))
+        * (0.6 * np.sin(2 * np.pi * 150.0 * t) + 0.4 * np.sin(2 * np.pi * 300.0 * t))
+    ).astype(np.float32)
+    vad_cont = detector.analizar(voz_continua)
+    assert vad_cont.es_toma_valida
+    assert vad_cont.duracion_voz_seg >= 2.2
+
+    # Ruido blanco de banda ancha: energía dispersa por encima de la banda vocal
+    rng = np.random.default_rng(7)
+    ruido_blanco = (0.2 * rng.standard_normal(sr * 3)).astype(np.float32)
+    vad_ruido = detector.analizar(ruido_blanco)
+    assert not vad_ruido.es_toma_valida
+
+    # Zumbido subgrave de 45 Hz fuera de la banda vocal
+    zumbido = (0.4 * np.sin(2 * np.pi * 45.0 * t)).astype(np.float32)
+    vad_zumbido = detector.analizar(zumbido)
+    assert not vad_zumbido.es_toma_valida
+
+
+def test_lda_balancear_clases_limita_dominio_mayoritaria():
+    from lda import entrenar_lda, proyectar
+
+    rng = np.random.default_rng(123)
+    D = 12
+
+    # Clase 0 muy sobrerrepresentada (200 muestras) con dispersión moderada en e1;
+    # sin balanceo infla Sw[1,1] y eclipsa la separación entre clases 1 y 2 en dims=2
+    x0 = np.zeros((200, D), dtype=np.float32)
+    x0[:, 0] = 1.0
+    x0[:, 1] = 0.20 * rng.standard_normal(200).astype(np.float32)
+    x0 += 0.03 * rng.standard_normal((200, D)).astype(np.float32)
+
+    x1 = np.zeros((5, D), dtype=np.float32)
+    x1[:, 1] = 1.0
+    x1 += 0.02 * rng.standard_normal((5, D)).astype(np.float32)
+
+    x2 = np.zeros((5, D), dtype=np.float32)
+    x2[:, 1] = -1.0
+    x2 += 0.02 * rng.standard_normal((5, D)).astype(np.float32)
+
+    x3 = np.zeros((5, D), dtype=np.float32)
+    x3[:, 0] = -0.7
+    x3[:, 2] = 0.7 + 0.25 * rng.standard_normal(5).astype(np.float32)
+    x3 += 0.02 * rng.standard_normal((5, D)).astype(np.float32)
+
+    X = np.vstack([x0, x1, x2, x3])
+    X /= np.linalg.norm(X, axis=1, keepdims=True)
+    y = np.array([0] * 200 + [1] * 5 + [2] * 5 + [3] * 5)
+
+    mu_bal, W_bal = entrenar_lda(X, y, dims=2, reg=1e-4, balancear_clases=True, max_peso_clase=5)
+    mu_raw, W_raw = entrenar_lda(X, y, dims=2, reg=1e-4, balancear_clases=False)
+
+    assert mu_bal.shape == (D,) and W_bal.shape == (D, 2)
+    assert np.all(np.isfinite(mu_bal)) and np.all(np.isfinite(W_bal))
+    assert not np.allclose(W_bal, W_raw)
+
+    def _dist_c1_c2(mu_v, W_v):
+        p1 = proyectar(X[y == 1], mu_v, W_v).mean(0)
+        p2 = proyectar(X[y == 2], mu_v, W_v).mean(0)
+        p1 /= np.linalg.norm(p1)
+        p2 /= np.linalg.norm(p2)
+        return float(1.0 - p1 @ p2)
+
+    # Con balanceo de clases la discriminación entre clases minoritarias no queda aplastada
+    assert _dist_c1_c2(mu_bal, W_bal) > _dist_c1_c2(mu_raw, W_raw)
+
+
+def test_realzar_voz_lejana_y_atenuar_fondo():
+    from aumento_acustico import realzar_voz_lejana_y_atenuar_fondo
+
+    sr = 16000
+    t = np.arange(sr * 2, dtype=np.float32) / sr
+    # Señal muy apagada en agudos (baja frecuencia dominante -> r1 > 0.85) con tramo de siseo débil
+    voz_apagada = (0.5 * np.sin(2 * np.pi * 140.0 * t) + 0.05 * np.sin(2 * np.pi * 1800.0 * t)).astype(np.float32)
+    # Silencio con pequeño siseo de alta frecuencia en el último medio segundo
+    voz_apagada[int(sr * 1.5) :] = (0.01 * np.sin(2 * np.pi * 6000.0 * t[: int(sr * 0.5)])).astype(np.float32)
+
+    procesada = realzar_voz_lejana_y_atenuar_fondo(voz_apagada, sr=sr)
+    assert procesada.shape == voz_apagada.shape
+    assert np.all(np.isfinite(procesada))
+
+    # El tramo de cola no vocal debe quedar atenuado respecto a la entrada
+    rms_cola_in = float(np.sqrt(np.mean(voz_apagada[int(sr * 1.6) :] ** 2)))
+    rms_cola_out = float(np.sqrt(np.mean(procesada[int(sr * 1.6) :] ** 2)))
+    assert rms_cola_out < 0.75 * rms_cola_in
+
+
+def test_lda_tikhonov_shrinkage_generaliza_en_pocas_muestras():
+    import inspect
+    from lda import entrenar_lda, normaliza, proyectar
+
+    assert inspect.signature(entrenar_lda).parameters["reg"].default == 1.25
+
+    rng = np.random.default_rng(77)
+    D = 24
+    # Pocas clases de entrenamiento con varianza intra-clase subestimada en ejes 0..3
+    # (p. ej. canal limpio en entrenamiento) y alta en ejes 4..11: sin shrinkage suficiente
+    # (reg=1e-4), LDA sobrepondera los ejes 0..3 y se vuelve frágil ante ruido en prueba.
+    n_clases_tr = 12
+    X_tr_l, y_tr_l = [], []
+    for c in range(n_clases_tr):
+        base = np.zeros(D, dtype=np.float32)
+        base[c % 12] = 1.2
+        base[(c + 4) % 12] = 1.0
+        for _ in range(4):
+            ruido = np.zeros(D, dtype=np.float32)
+            ruido[:4] = 0.005 * rng.standard_normal(4).astype(np.float32)
+            ruido[4:] = 0.25 * rng.standard_normal(D - 4).astype(np.float32)
+            X_tr_l.append(base + ruido)
+            y_tr_l.append(c)
+    X_tr = normaliza(np.stack(X_tr_l))
+    y_tr = np.array(y_tr_l)
+
+    mu_def, W_def = entrenar_lda(X_tr, y_tr)
+    mu_baja, W_baja = entrenar_lda(X_tr, y_tr, reg=1e-4)
+    assert W_def.shape == (D, D)
+
+    # Hablantes nuevos (fuera de entrenamiento) con ruido realista también en los ejes 0..3
+    cA = np.zeros(D, dtype=np.float32)
+    cA[4:10] = [1.0, -0.8, 0.7, 0.6, -0.5, 0.4]
+    cA /= np.linalg.norm(cA)
+    cB = np.zeros(D, dtype=np.float32)
+    cB[4:10] = [-0.8, 0.9, -0.6, 0.7, 0.5, -0.4]
+    cB /= np.linalg.norm(cB)
+
+    def tomar_muestras(c, n=12):
+        ruido = rng.normal(0.0, 0.18, size=(n, D)).astype(np.float32)
+        return normaliza(c[None, :] + ruido)
+
+    qA1 = tomar_muestras(cA, 8)
+    qA2 = tomar_muestras(cA, 8)
+    qB = tomar_muestras(cB, 8)
+
+    P_def_A1 = proyectar(qA1, mu_def, W_def)
+    P_def_A2 = proyectar(qA2, mu_def, W_def)
+    P_def_B = proyectar(qB, mu_def, W_def)
+    P_baja_A1 = proyectar(qA1, mu_baja, W_baja)
+    P_baja_A2 = proyectar(qA2, mu_baja, W_baja)
+    P_baja_B = proyectar(qB, mu_baja, W_baja)
+
+    margen_def = float(np.mean(np.sum(P_def_A1 * P_def_A2, axis=1)) - np.mean(np.sum(P_def_A1 * P_def_B, axis=1)))
+    margen_baja = float(np.mean(np.sum(P_baja_A1 * P_baja_A2, axis=1)) - np.mean(np.sum(P_baja_A1 * P_baja_B, axis=1)))
+    assert margen_def > margen_baja + 0.10

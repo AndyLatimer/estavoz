@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <!-- Activa el aislamiento entre orígenes (Hugging Face no manda la cabecera COEP) para poder usar
      varios núcleos del procesador. La primera visita recarga la página una vez. -->
+<script>window.coi = { coepCredentialless: () => Boolean(window.chrome) || !(window.chrome || window.netscape) };</script>
 <script src="coi-serviceworker.min.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Estavoz · ¿Quién pone esa voz?</title>
@@ -23,104 +24,159 @@
   :root {
     --tinta: #14110f;      /* negro cálido de cabina */
     --cabina: #1d1915;
-    --linea: rgba(243,234,216,.12);
+    --linea: rgba(243,234,216,.16);
     --papel: #f3ead8;      /* crema de guion */
-    --gris: #a69a86;
+    --gris: #bfb29c;       /* contraste reforzado para lectura cómoda en salón */
     --rojo: #e5322d;       /* piloto de grabación */
     --ambar: #f2b134;      /* vúmetro */
+    --verde: #5ec27e;      /* toma confirmada */
     --serif: Fraunces, Georgia, serif;
     --mono: "JetBrains Mono", ui-monospace, monospace;
     --nivel: 0;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin: 0; }
-  body { min-height: 100dvh; background: var(--tinta); color: var(--papel); font-family: var(--serif); overflow-x: hidden; }
+  body { min-height: 100dvh; background: var(--tinta); color: var(--papel); font-family: var(--serif); overflow-x: hidden; -webkit-font-smoothing: antialiased; }
+  button:focus-visible, a:focus-visible, input:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--ambar); outline-offset: 2px; }
 
-  /* viñeta de cabina + grano de película */
+  /* viñeta de cabina + grano sutil estático (evita repintados continuos de GPU en móvil) */
   body::before { content: ""; position: fixed; inset: 0; z-index: -2;
     background: radial-gradient(120% 80% at 50% 30%, #241e19 0%, var(--tinta) 60%, #0c0a09 100%); }
-  body::after { content: ""; position: fixed; inset: -50%; z-index: 9; pointer-events: none; opacity: .07;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-    animation: grano .9s steps(4) infinite; }
-  @keyframes grano { 25% { transform: translate(-3%, 2%); } 50% { transform: translate(2%, -3%); } 75% { transform: translate(-1%, -2%); } }
+  body::after { content: ""; position: fixed; inset: 0; z-index: 9; pointer-events: none; opacity: .05;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
 
-  main { width: 100%; max-width: 460px; margin: 0 auto; padding: max(18px, env(safe-area-inset-top)) 16px 24px;
+  main { width: 100%; max-width: 500px; margin: 0 auto; padding: max(16px, env(safe-area-inset-top)) 18px 28px;
          display: flex; flex-direction: column; min-height: 100dvh; }
 
-  /* barra superior: marca + piloto */
-  .barra-sup { display: flex; justify-content: space-between; align-items: center; padding-bottom: 14px; border-bottom: 1px solid var(--linea); }
+  /* barra superior: marca + piloto + historial */
+  .barra-sup { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding-bottom: 12px; border-bottom: 1px solid var(--linea); }
+  .barra-der { display: flex; align-items: center; gap: 10px; }
+  .btn-hist { background: rgba(243,234,216,.07); border: 1px solid var(--linea); color: var(--papel); border-radius: 999px;
+              padding: 5px 11px; font: 600 11px var(--mono); letter-spacing: .07em; text-transform: uppercase; cursor: pointer; }
+  .btn-hist:hover, .btn-hist.activo { color: var(--ambar); border-color: var(--ambar); }
+  #sala.soltando { outline: 2px dashed var(--ambar); outline-offset: -6px; border-radius: 8px; }
+  .aviso-actualizacion { margin-top: 10px; padding: 9px 12px; border-radius: 6px; border: 1px solid rgba(242,177,52,.45);
+                         background: rgba(242,177,52,.10); display: flex; align-items: center; justify-content: space-between; gap: 8px;
+                         font: 11.5px var(--mono); color: var(--papel); }
+  .aviso-actualizacion button { background: var(--ambar); color: #14110f; border: none; border-radius: 4px; padding: 5px 10px;
+                                font: 700 11px var(--mono); letter-spacing: .06em; text-transform: uppercase; cursor: pointer; }
   .marca { font-size: 26px; font-style: italic; font-weight: 600; letter-spacing: -.01em; }
   .marca b { color: var(--rojo); font-style: normal; }
-  .piloto { font: 600 11px var(--mono); letter-spacing: .14em; color: var(--gris); display: flex; align-items: center; gap: 8px; }
+  .piloto { font: 600 11.5px var(--mono); letter-spacing: .12em; color: var(--gris); display: flex; align-items: center; gap: 8px; }
   .piloto i { width: 10px; height: 10px; border-radius: 50%; background: #4a2522; box-shadow: inset 0 1px 2px rgba(0,0,0,.6); }
   .grabando .piloto { color: var(--papel); }
   .grabando .piloto i { background: var(--rojo); box-shadow: 0 0 12px 2px rgba(229,50,45,.8); animation: parpadea 1s steps(2) infinite; }
   .analizando .piloto i { background: var(--ambar); box-shadow: 0 0 12px 2px rgba(242,177,52,.6); }
   @keyframes parpadea { 50% { opacity: .35; } }
 
-  h1 { font-weight: 400; font-size: 46px; line-height: 1; letter-spacing: -.02em; margin: 34px 0 0; }
+  h1 { font-weight: 400; font-size: clamp(33px, 8.5vw, 45px); line-height: 1.04; letter-spacing: -.02em; margin: 18px 0 0; }
   h1 em { font-weight: 600; color: var(--papel); }
   h1 b { color: var(--rojo); font-weight: 600; font-style: italic; }
-  .indicacion { font: 400 13px/1.6 var(--mono); color: var(--gris); margin: 14px 0 0; }
+  .indicacion { font: 400 13.5px/1.55 var(--mono); color: var(--gris); margin: 9px 0 0; }
 
   /* pista: ¿qué estás viendo? */
-  .pista { margin-top: 22px; }
-  .pista label { font: 600 11px var(--mono); letter-spacing: .16em; color: var(--gris); display: block; margin-bottom: 8px; }
+  .pista { margin-top: 16px; }
+  .pista label { font: 600 11.5px var(--mono); letter-spacing: .13em; color: var(--gris); display: block; margin-bottom: 7px; }
   .pista-caja { position: relative; display: flex; align-items: center; }
-  .pista input { width: 100%; padding: 13px 44px 13px 14px; border-radius: 4px; border: 1px solid var(--linea); background: var(--cabina);
-                 color: var(--papel); font: italic 18px var(--serif); outline: none; border-color: rgba(229,50,45,.45); }
-  .pista input:focus { border-color: var(--rojo); }
-  .pista .recomendado { color: var(--rojo); font-weight: 600; letter-spacing: .12em; margin-left: 6px; }
+  .pista input { width: 100%; padding: 13px 78px 13px 15px; border-radius: 5px; border: 1px solid rgba(229,50,45,.55); background: var(--cabina);
+                 color: var(--papel); font: italic 18px var(--serif); outline: none; }
+  .pista input:focus { border-color: var(--rojo); box-shadow: 0 0 0 2px rgba(229,50,45,.18); }
+  .pista .recomendado { color: var(--rojo); font-weight: 600; letter-spacing: .10em; margin-left: 6px; }
+  .btn-limpiar-obra { position: absolute; right: 42px; background: none; border: none; color: var(--gris); cursor: pointer;
+                      padding: 6px 8px; font: 600 14px var(--mono); display: none; }
+  .btn-limpiar-obra:hover { color: var(--papel); }
   .btn-voz-obra { position: absolute; right: 10px; background: none; border: none; color: var(--gris); cursor: pointer; padding: 6px; border-radius: 50%; display: grid; place-items: center; transition: color .15s, background .15s; }
   .btn-voz-obra:hover { color: var(--papel); }
   .btn-voz-obra.escuchando { color: var(--rojo); animation: parpadea 1s infinite; }
-  .chips-pista { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 8px; font: 11px var(--mono); color: var(--gris); }
-  .chips-pista span { letter-spacing: .08em; }
-  .chips-pista button { background: rgba(243,234,216,.05); border: 1px solid var(--linea); color: var(--papel); padding: 3px 8px; border-radius: 12px; font: 11px var(--mono); cursor: pointer; transition: background .12s, border-color .12s; }
-  .chips-pista button:hover, .chips-pista button.activo { border-color: var(--rojo); background: rgba(229,50,45,.15); }
-  .sin-pista { margin-top: 18px; padding: 12px 14px; border: 1px dashed rgba(229,50,45,.5); border-radius: 4px; }
-  .sin-pista p { margin: 0 0 10px; font: italic 17px/1.35 var(--serif); }
+  .chips-pista { display: flex; gap: 7px; flex-wrap: nowrap; overflow-x: auto; align-items: center; margin-top: 9px;
+                 padding-bottom: 3px; font: 11.5px var(--mono); color: var(--gris); scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  @media (min-width: 480px) { .chips-pista { flex-wrap: wrap; overflow-x: visible; } }
+  .chips-pista::-webkit-scrollbar { display: none; }
+  .chips-pista span, .chips-pista button { flex: 0 0 auto; white-space: nowrap; }
+  .chips-pista span { letter-spacing: .06em; }
+  .chips-pista button { background: rgba(243,234,216,.06); border: 1px solid var(--linea); color: var(--papel); padding: 5px 11px; border-radius: 999px; font: 11.5px var(--mono); cursor: pointer; transition: background .12s, border-color .12s; }
+  .chips-pista button:hover, .chips-pista button.activo { border-color: var(--rojo); background: rgba(229,50,45,.18); }
+  .sin-pista { margin-top: 18px; padding: 13px 15px; border: 1px dashed rgba(229,50,45,.55); border-radius: 5px; background: rgba(229,50,45,.04); }
+  .sin-pista p { margin: 0 0 10px; font: italic 17.5px/1.4 var(--serif); }
   .sin-pista button { font: 600 12px var(--mono); letter-spacing: .08em; padding: 10px 14px; border-radius: 4px; cursor: pointer;
                       background: transparent; color: var(--papel); border: 1px solid var(--rojo); }
-  .pista input::placeholder { color: #6f6556; }
-  .pista .nota { font: 11px/1.5 var(--mono); color: var(--gris); margin-top: 6px; min-height: 1.5em; }
-  .sugerencias { display: grid; gap: 4px; margin-top: 6px; }
-  .sugerencias button { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; text-align: left; cursor: pointer;
-                        padding: 9px 12px; border-radius: 4px; border: 1px solid var(--linea); background: var(--cabina); color: var(--papel); }
-  .sugerencias button:active { border-color: var(--gris); }
-  .sugerencias .tipo { grid-column: 1 / -1; font: 600 10px var(--mono); letter-spacing: .14em; color: var(--gris); }
-  .sugerencias .txt { font: italic 17px var(--serif); }
-  .sugerencias .n { font: 11px var(--mono); color: var(--gris); align-self: center; }
-  .acierto-pista { background: rgba(229,50,45,.08); margin: 0 -8px; padding: 11px 8px !important; border-radius: 4px; }
-  .aviso-dialogo { background: rgba(242,177,52,.1); border: 1px solid rgba(242,177,52,.35); border-radius: 6px; padding: 14px 16px; margin-bottom: 14px; }
-  .aviso-dialogo p { margin: 6px 0 10px; font-size: 15px; color: var(--papel); }
+  .pista input::placeholder { color: #8a7e6d; }
+  .pista .nota { font: 12px/1.55 var(--mono); color: var(--gris); margin-top: 7px; min-height: 1.5em; }
+  .sugerencias { display: grid; gap: 5px; margin-top: 6px; }
+  .sugerencias button { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; text-align: left; cursor: pointer;
+                        padding: 10px 13px; border-radius: 5px; border: 1px solid var(--linea); background: var(--cabina); color: var(--papel); }
+  .sugerencias button:hover, .sugerencias button:active { border-color: var(--ambar); background: rgba(243,234,216,.04); }
+  .sugerencias .tipo { grid-column: 1 / -1; font: 600 11px var(--mono); letter-spacing: .11em; color: var(--ambar); }
+  .sugerencias .txt { font: italic 18px var(--serif); }
+  .sugerencias .n { font: 11.5px var(--mono); color: var(--gris); align-self: center; }
+  .reparto-pista-wrap { margin-top: 8px; }
+  .btn-reparto-toggle { background: none; border: 1px solid var(--linea); color: var(--ambar); border-radius: 999px;
+                        padding: 5px 11px; font: 600 11px var(--mono); letter-spacing: .06em; cursor: pointer; }
+  .btn-reparto-toggle:hover { border-color: var(--ambar); background: rgba(242,177,52,.10); }
+  .reparto-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .reparto-chips button { background: rgba(243,234,216,.06); border: 1px solid var(--linea); color: var(--papel);
+                          border-radius: 999px; padding: 5px 11px; font: 11.5px var(--mono); cursor: pointer; }
+  .reparto-chips button:hover { border-color: var(--ambar); color: var(--ambar); }
+  .pistas-activas { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip-pista-activa { display: inline-flex; align-items: center; gap: 6px; background: rgba(229,50,45,.16);
+                       border: 1px solid var(--rojo); color: var(--papel); border-radius: 999px; padding: 5px 11px;
+                       font: 600 11.5px var(--mono); }
+  .chip-pista-activa button { background: none; border: none; color: var(--gris); cursor: pointer; padding: 0 0 0 2px;
+                              font: 700 13px var(--mono); line-height: 1; }
+  .chip-pista-activa button:hover { color: var(--papel); }
+  .aviso-gemelo { margin-top: 12px; padding: 11px 13px; border-radius: 5px; background: rgba(242,177,52,.10);
+                  border: 1px solid rgba(242,177,52,.42); font: 12px/1.5 var(--mono); color: var(--papel);
+                  display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .aviso-gemelo button { background: rgba(242,177,52,.18); border: 1px solid var(--ambar); color: var(--ambar);
+                         border-radius: 4px; padding: 5px 10px; font: 600 11px var(--mono); cursor: pointer; }
+  .panel-recorte { margin-top: 12px; padding: 13px 15px; background: rgba(20,17,15,.72); border: 1px solid var(--linea); border-radius: 6px; }
+  .canvas-recorte { width: 100%; height: 54px; display: block; margin: 8px 0; border-radius: 4px; background: rgba(243,234,216,.04); cursor: ew-resize; touch-action: none; }
+  .rangos-recorte { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 6px; font: 11.5px var(--mono); color: var(--gris); }
+  .rangos-recorte input[type="range"] { width: 100%; accent-color: var(--ambar); cursor: pointer; }
+  .recorte-btns { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .panel-cara-a-cara { margin-top: 14px; padding: 14px; background: rgba(20,17,15,.78); border: 1px solid rgba(242,177,52,.42); border-radius: 6px; }
+  .grid-cara { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+  @media (max-width: 440px) { .grid-cara { grid-template-columns: 1fr; } }
+  .col-cara { background: var(--cabina); border: 1px solid var(--linea); border-radius: 5px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .col-cara .cab-cara { display: flex; align-items: center; gap: 10px; }
+  .col-cara .nom-cara { font-size: 18.5px; font-weight: 600; line-height: 1.12; }
+  .col-cara .roles-cara { list-style: none; padding: 0; margin: 0; font-size: 13.5px; color: var(--papel); display: grid; gap: 5px; }
+  .col-cara .roles-cara span { display: block; font: 11px var(--mono); color: var(--gris); }
+  .diagnostico-acustico { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .tele-pill { font: 600 11px var(--mono); letter-spacing: .07em; text-transform: uppercase; padding: 4px 8px;
+               border-radius: 4px; background: rgba(243,234,216,.07); border: 1px solid var(--linea); color: var(--gris); }
+  .tele-pill.aviso { color: var(--ambar); border-color: rgba(242,177,52,.45); background: rgba(242,177,52,.10); }
+  .acierto-pista { background: rgba(229,50,45,.10); margin: 0 -8px; padding: 11px 8px !important; border-radius: 4px; }
+  .aviso-dialogo { background: rgba(242,177,52,.1); border: 1px solid rgba(242,177,52,.38); border-radius: 6px; padding: 14px 16px; margin-bottom: 14px; }
+  .aviso-dialogo p { margin: 6px 0 10px; font-size: 15.5px; line-height: 1.45; color: var(--papel); }
   .turnos-dialogo { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   @media (max-width: 520px) { .turnos-dialogo { grid-template-columns: 1fr; } }
-  .turno-box { background: var(--cabina); border: 1px solid var(--linea); border-radius: 4px; padding: 10px 12px; }
-  .turno-box .etiqueta-turno { display: block; font: 600 10px var(--mono); letter-spacing: .12em; color: var(--gris); margin-bottom: 4px; }
-  .turno-box strong { font-size: 16px; color: var(--papel); }
+  .turno-box { background: var(--cabina); border: 1px solid var(--linea); border-radius: 4px; padding: 11px 13px; display: flex; flex-direction: column; gap: 5px; }
+  .turno-box .etiqueta-turno { display: block; font: 600 11px var(--mono); letter-spacing: .10em; color: var(--gris); }
+  .turno-box strong { font-size: 17px; color: var(--papel); }
+  .turno-box .turno-pie { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 2px; }
 
   /* botón de grabación */
-  .escena { position: relative; width: 240px; height: 240px; margin: 34px auto 16px; display: grid; place-items: center; }
-  .progreso { position: absolute; inset: 0; transform: rotate(-90deg); }
+  .escena { position: relative; width: 216px; height: 216px; margin: 20px auto 10px; display: grid; place-items: center; }
+  .progreso { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
   .progreso circle { fill: none; }
   .progreso .marcas { stroke: var(--linea); stroke-width: 10; stroke-dasharray: 2 9.5; }
   .progreso .barra { stroke: var(--rojo); stroke-width: 10; stroke-dasharray: 735; stroke-dashoffset: 735; opacity: 0; }
   .grabando .progreso .barra { opacity: 1; }
 
-  #btn { position: relative; width: 168px; height: 168px; border-radius: 50%; cursor: pointer; font: inherit;
+  #btn { position: relative; width: 154px; height: 154px; border-radius: 50%; cursor: pointer; font: inherit;
          border: 6px solid var(--papel); background: var(--tinta); display: grid; place-items: center; padding: 0;
          transition: transform .2s ease, opacity .3s; }
-  #btn .rec { width: 118px; height: 118px; border-radius: 50%; display: grid; place-items: center;
+  #btn .rec { width: 108px; height: 108px; border-radius: 50%; display: grid; place-items: center;
               background: radial-gradient(circle at 35% 30%, #ff5a4f, var(--rojo) 45%, #9e1612);
               box-shadow: inset 0 -6px 14px rgba(0,0,0,.35), 0 0 calc(var(--nivel) * 60px) calc(var(--nivel) * 10px) rgba(229,50,45,.7);
               transform: scale(calc(1 + var(--nivel) * .08)); transition: transform .08s; }
-  #btn svg { width: 46px; height: 46px; }
+  #btn svg { width: 42px; height: 42px; }
   #btn:active { transform: scale(.97); }
   #btn:disabled { cursor: default; opacity: .45; }
   .grabando #btn, .analizando #btn { opacity: 1; }
   .grabando #btn { border-color: var(--rojo); cursor: pointer; }
-  .grabando #btn .rec { border-radius: 20px; width: 76px; height: 76px; transition: all .2s; }
+  .grabando #btn .rec { border-radius: 20px; width: 72px; height: 72px; transition: all .2s; }
   .grabando #btn svg { display: none; }
   .grabando #btn::after {
     content: "PARAR";
@@ -133,82 +189,116 @@
   .analizando #btn .rec { background: radial-gradient(circle at 35% 30%, #ffd27a, var(--ambar) 45%, #a8700b); animation: late 1s ease-in-out infinite; }
   @keyframes late { 50% { transform: scale(.92); } }
 
-  /* código de tiempo y vúmetro */
+  /* código de tiempo, forma de onda en vivo y vúmetro */
   .tc { text-align: center; font: 600 22px var(--mono); letter-spacing: .06em; color: var(--gris); }
   .grabando .tc { color: var(--papel); }
-  .vu { display: grid; grid-template-columns: repeat(30, 1fr); gap: 3px; width: 240px; margin: 12px auto 0; }
+  #onda { display: none; width: 240px; height: 26px; margin: 10px auto 0; border-radius: 3px; background: rgba(243,234,216,.03); }
+  .grabando #onda { display: block; }
+  .vu { display: grid; grid-template-columns: repeat(30, 1fr); gap: 3px; width: 240px; margin: 10px auto 0; }
   .vu i { height: 12px; border-radius: 1px; background: rgba(243,234,216,.08); transition: background .06s; }
   .vu i.on { background: var(--ambar); }
   .vu i.on:nth-child(n+24) { background: var(--rojo); }
 
-  #estado { margin-top: 18px; min-height: 26px; text-align: center; font-size: 19px; font-style: italic; }
+  #estado { margin-top: 14px; min-height: 26px; text-align: center; font-size: 18.5px; line-height: 1.4; font-style: italic; }
+  .nota-carga { text-align: center; font: 12px/1.55 var(--mono); color: var(--gris); margin-top: 6px; }
   .carga { width: 240px; height: 3px; margin: 10px auto 0; background: var(--linea); }
   .carga div { height: 100%; width: 0; background: var(--papel); transition: width .2s; }
-  .subir { margin-top: 10px; text-align: center; font: 12px var(--mono); color: var(--gris); }
+  .subir { margin-top: 11px; text-align: center; font: 12.5px var(--mono); color: var(--gris); }
   .subir label { color: var(--papel); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
 
-  /* resultados: ficha de toma */
-  #resultados { margin-top: 28px; display: grid; gap: 14px; }
-  .ficha { background: var(--cabina); border: 1px solid var(--linea); border-radius: 6px; padding: 20px; animation: entra .5s cubic-bezier(.2,.8,.2,1) both; }
+  /* resultados: ficha de toma y 3 estados */
+  #resultados { margin-top: 24px; display: grid; gap: 15px; }
+  .ficha { background: var(--cabina); border: 1px solid var(--linea); border-radius: 7px; padding: 22px; animation: entra .5s cubic-bezier(.2,.8,.2,1) both; }
   @keyframes entra { from { opacity: 0; transform: translateY(14px); } }
   .ficha.principal { border-top: 3px solid var(--rojo); }
-  .rotulo { font: 600 11px var(--mono); letter-spacing: .16em; color: var(--gris); display: flex; justify-content: space-between; }
+  .ficha.principal.estado-identificado { border-top-color: var(--verde); }
+  .ficha.principal.estado-dudoso { border-top-color: var(--ambar); }
+  .ficha.principal.estado-desconocido { border-top-color: var(--gris); }
+  .badge-estado { display: inline-block; padding: 3px 8px; border-radius: 3px; font: 700 11px var(--mono); letter-spacing: .09em; }
+  .badge-estado.ok { background: rgba(94,194,126,.16); color: var(--verde); border: 1px solid rgba(94,194,126,.45); }
+  .badge-estado.duda { background: rgba(242,177,52,.15); color: var(--ambar); border: 1px solid rgba(242,177,52,.45); }
+  .badge-estado.desc { background: rgba(243,234,216,.08); color: var(--gris); border: 1px solid var(--linea); }
+  .consejos-desc { margin: 12px 0 0; padding-left: 18px; font: 13px/1.65 var(--mono); color: var(--gris); }
+  .consejos-desc li { margin: 5px 0; }
+  .rotulo { font: 600 11.5px var(--mono); letter-spacing: .12em; color: var(--gris); display: flex; justify-content: space-between; align-items: center; gap: 8px; }
   .quien { display: flex; gap: 16px; align-items: flex-end; margin-top: 16px; }
-  .foto { flex-shrink: 0; width: 96px; height: 110px; border-radius: 3px; object-fit: cover; object-position: top;
-          filter: grayscale(1) sepia(.35) contrast(1.1) brightness(.95); }
-  .foto.ini { display: grid; place-items: center; background: var(--papel); color: var(--tinta); font: italic 600 38px var(--serif); filter: none; }
-  .foto.peq { width: 44px; height: 50px; font-size: 19px; }
-  .nombre { font-size: 34px; font-weight: 600; line-height: 1; letter-spacing: -.02em; }
-  .dato { font: 12px var(--mono); color: var(--gris); margin-top: 8px; }
-  .medidor { margin-top: 22px; }
-  .medidor .rotulo b { color: var(--papel); font-size: 13px; }
+  .foto { flex-shrink: 0; width: 96px; height: 112px; border-radius: 4px; object-fit: cover; object-position: top;
+          filter: grayscale(1) sepia(.35) contrast(1.1) brightness(.95); transition: filter .25s ease; }
+  .foto:hover, .foto.color { filter: none; }
+  .foto.ini { display: grid; place-items: center; background: linear-gradient(155deg, #2d251e 0%, #191512 100%);
+              color: var(--papel); border: 1px solid rgba(243,234,216,.24); font: italic 600 36px var(--serif); filter: none; }
+  .foto.peq { width: 46px; height: 52px; font-size: 18px; }
+  .nombre { font-size: 32px; font-weight: 600; line-height: 1.06; letter-spacing: -.02em; }
+  .dato { font: 12.5px/1.5 var(--mono); color: var(--gris); margin-top: 8px; }
+  .medidor { margin-top: 20px; }
+  .medidor .rotulo b { color: var(--papel); font-size: 15.5px; letter-spacing: .04em; }
   .leds { display: grid; grid-template-columns: repeat(20, 1fr); gap: 3px; margin-top: 8px; }
-  .leds i { height: 14px; border-radius: 1px; background: rgba(243,234,216,.08); }
+  .leds i { height: 15px; border-radius: 2px; background: rgba(243,234,216,.09); }
   .leds i.on { background: var(--ambar); animation: enciende .25s both; }
-  @keyframes enciende { from { background: rgba(243,234,216,.08); } }
+  @keyframes enciende { from { background: rgba(243,234,216,.09); } }
   .guion { list-style: none; margin: 10px 0 0; padding: 0; }
-  .guion li { padding: 11px 0; border-bottom: 1px dashed var(--linea); }
+  .guion li { padding: 12px 0; border-bottom: 1px dashed var(--linea); transition: background .12s; }
   .guion li:last-child { border-bottom: 0; }
-  .guion .personaje { font-size: 18px; font-style: italic; }
-  .guion .obra { display: block; font: 11px var(--mono); letter-spacing: .06em; color: var(--gris); margin-top: 3px; text-transform: uppercase; }
-  .acciones { display: flex; gap: 10px; margin-top: 18px; }
-  .acciones button { flex: 1; padding: 14px 10px; border-radius: 4px; font: 600 12px var(--mono); letter-spacing: .12em; text-transform: uppercase; cursor: pointer;
-                     background: transparent; color: var(--papel); border: 1px solid var(--papel); }
+  .guion li.filtrable { cursor: pointer; padding-left: 4px; padding-right: 4px; border-radius: 4px; }
+  .guion li.filtrable:hover { background: rgba(243,234,216,.04); }
+  .guion li.filtrable:hover .obra { color: var(--ambar); }
+  .guion .obra-ir { float: right; opacity: .55; font-size: 11px; margin-left: 6px; }
+  .guion li.filtrable:hover .obra-ir { opacity: 1; color: var(--ambar); }
+  .guion .personaje { font-size: 19px; font-style: italic; line-height: 1.25; display: block; }
+  .guion .obra { display: block; font: 12px/1.45 var(--mono); letter-spacing: .05em; color: var(--gris); margin-top: 4px; text-transform: uppercase; transition: color .12s; }
+  .acciones { display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
+  .acciones button { flex: 1; min-width: 120px; padding: 13px 12px; border-radius: 5px; font: 600 12px var(--mono); letter-spacing: .11em; text-transform: uppercase; cursor: pointer;
+                     background: transparent; color: var(--papel); border: 1px solid var(--papel); transition: background .15s, border-color .15s; }
+  .acciones button:hover { background: rgba(243,234,216,.08); }
   .acciones button.prim { background: var(--rojo); border-color: var(--rojo); }
+  .acciones button.prim:hover { background: #f03c37; }
   .acciones button.sec { border-color: var(--ambar); color: var(--ambar); }
   .acciones button.sec:hover { background: rgba(242,177,52,.12); }
-  .verificacion-actor { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 18px; padding: 12px 14px; background: rgba(243,234,216,.04); border: 1px solid var(--linea); border-radius: 6px; flex-wrap: wrap; }
-  .btn-muestra { display: inline-flex; align-items: center; gap: 8px; background: rgba(243,234,216,.08); color: var(--papel); border: 1px solid var(--linea); border-radius: 4px; padding: 8px 12px; font: 600 11px var(--mono); letter-spacing: .08em; text-transform: uppercase; cursor: pointer; transition: background .15s, border-color .15s; }
+  .acciones-util { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .acciones-util button { flex: 1; min-width: 120px; padding: 9px 10px; border-radius: 4px; font: 600 11px var(--mono); letter-spacing: .08em; text-transform: uppercase; cursor: pointer;
+                          background: rgba(243,234,216,.04); color: var(--gris); border: 1px solid var(--linea); transition: color .15s, border-color .15s, background .15s; }
+  .acciones-util button:hover { color: var(--papel); border-color: var(--ambar); background: rgba(243,234,216,.08); }
+  .verificacion-actor { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 18px; padding: 12px 14px; background: rgba(243,234,216,.04); border: 1px solid var(--linea); border-radius: 6px; flex-wrap: wrap; }
+  .verificacion-btns { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .btn-muestra { display: inline-flex; align-items: center; gap: 7px; background: rgba(243,234,216,.08); color: var(--papel); border: 1px solid var(--linea); border-radius: 4px; padding: 8px 11px; font: 600 11.5px var(--mono); letter-spacing: .06em; text-transform: uppercase; cursor: pointer; transition: background .15s, border-color .15s; }
   .btn-muestra:hover { background: rgba(243,234,216,.14); border-color: var(--papel); }
+  .btn-muestra.mini { padding: 5px 9px; font-size: 11px; }
   .btn-muestra svg { flex-shrink: 0; }
   .enlace-ficha { font: 12px var(--mono); color: var(--gris); text-decoration: underline; text-underline-offset: 3px; }
   .enlace-ficha:hover { color: var(--papel); }
-  .otro { display: flex; align-items: center; gap: 14px; padding: 10px 0; border-bottom: 1px dashed var(--linea); }
-  .otro { display: flex; align-items: center; gap: 14px; padding: 10px 0; border-bottom: 1px dashed var(--linea); cursor: pointer; transition: background .12s; }
-  .otro:hover { background: rgba(243,234,216,.03); }
-  .otro:last-child { border-bottom: 0; padding-bottom: 0; }
-  .otro .n { font-size: 20px; font-weight: 600; }
-  .otro .pct { margin-left: auto; font: 600 13px var(--mono); color: var(--gris); }
+  .otro { display: flex; align-items: center; gap: 10px; padding: 11px 6px; border-bottom: 1px dashed var(--linea); cursor: pointer; transition: background .12s; border-radius: 4px; }
+  .otro:hover { background: rgba(243,234,216,.04); }
+  .otro:last-child { border-bottom: 0; padding-bottom: 2px; }
+  .otro .n { font-size: 19.5px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .otro .pct { margin-left: auto; font: 600 13.5px var(--mono); color: var(--gris); flex-shrink: 0; }
   .vozh { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; align-items: center; }
-  .vozh .rot { font: 600 10px var(--mono); letter-spacing: .12em; color: var(--gris); margin-right: 4px; }
-  .vozh button { background: rgba(243,234,216,.06); border: 1px solid var(--linea); color: var(--papel); border-radius: 999px; padding: 3px 9px; font: 11px var(--mono); cursor: pointer; }
+  .vozh .rot { font: 600 11px var(--mono); letter-spacing: .10em; color: var(--gris); margin-right: 4px; }
+  .vozh button { background: rgba(243,234,216,.06); border: 1px solid var(--linea); color: var(--papel); border-radius: 999px; padding: 5px 11px; font: 11.5px var(--mono); cursor: pointer; }
   .vozh button:hover { border-color: var(--ambar); color: var(--ambar); }
-  .badge-tipo { display: inline-block; font: 600 9px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--ambar); border: 1px solid rgba(242,177,52,.35); border-radius: 3px; padding: 1px 5px; margin-right: 6px; vertical-align: 1px; }
+  .badge-tipo { display: inline-block; font: 600 10.5px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ambar); border: 1px solid rgba(242,177,52,.4); border-radius: 3px; padding: 1px 5px; margin-right: 6px; vertical-align: 1px; }
+  .panel-historial { margin-top: 14px; background: var(--cabina); border: 1px solid var(--linea); border-radius: 6px; padding: 14px 16px; }
+  .hist-lista { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; max-height: 280px; overflow-y: auto; }
+  .hist-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 11px; border: 1px solid var(--linea);
+               border-radius: 4px; background: rgba(243,234,216,.03); cursor: pointer; text-align: left; color: var(--papel); width: 100%; }
+  .hist-item:hover { border-color: var(--ambar); }
+  .hist-item strong { font-size: 16.5px; display: block; }
+  .hist-item span { font: 11.5px var(--mono); color: var(--gris); }
+  .hist-limpiar { background: none; border: none; color: var(--gris); font: 11.5px var(--mono); text-decoration: underline; cursor: pointer; }
   .filmografia-box { margin-top: 18px; border-top: 1px dashed var(--linea); padding-top: 16px; }
-  .btn-explorar { width: 100%; padding: 11px 14px; border-radius: 4px; border: 1px solid var(--linea); background: rgba(243,234,216,.04); color: var(--papel); font: 600 11px var(--mono); letter-spacing: .1em; text-transform: uppercase; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
-  .btn-explorar:hover { border-color: var(--papel); background: rgba(243,234,216,.08); }
+  .btn-explorar { width: 100%; padding: 12px 14px; border-radius: 5px; border: 1px solid var(--linea); background: rgba(243,234,216,.05); color: var(--papel); font: 600 11.5px var(--mono); letter-spacing: .09em; text-transform: uppercase; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+  .btn-explorar:hover { border-color: var(--papel); background: rgba(243,234,216,.09); }
   .filmografia-panel { margin-top: 12px; }
   .filmo-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
-  .filmo-tabs button { background: rgba(243,234,216,.05); border: 1px solid var(--linea); color: var(--gris); padding: 4px 9px; border-radius: 999px; font: 11px var(--mono); cursor: pointer; }
+  .filmo-tabs button { background: rgba(243,234,216,.05); border: 1px solid var(--linea); color: var(--gris); padding: 5px 10px; border-radius: 999px; font: 11.5px var(--mono); cursor: pointer; }
   .filmo-tabs button.activo { border-color: var(--rojo); color: var(--papel); background: rgba(229,50,45,.18); }
-  .filmo-busca { width: 100%; padding: 9px 12px; border-radius: 4px; border: 1px solid var(--linea); background: var(--tinta); color: var(--papel); font: 13px var(--mono); outline: none; margin-bottom: 8px; }
+  .filmo-busca { width: 100%; padding: 10px 12px; border-radius: 4px; border: 1px solid var(--linea); background: var(--tinta); color: var(--papel); font: 13.5px var(--mono); outline: none; margin-bottom: 8px; }
   .filmo-busca:focus { border-color: var(--ambar); }
   .filmo-lista { list-style: none; margin: 0; padding: 0; max-height: 360px; overflow-y: auto; }
-  .filmo-lista li { padding: 8px 0; border-bottom: 1px dashed var(--linea); }
+  .filmo-lista li { padding: 9px 0; border-bottom: 1px dashed var(--linea); }
   .filmo-lista li:last-child { border-bottom: 0; }
-  .filmo-lista .pers { font-size: 16px; font-style: italic; }
-  .filmo-lista .meta { display: block; font: 11px var(--mono); color: var(--gris); margin-top: 2px; }
-  .btn-mas-filmo { width: 100%; margin-top: 8px; padding: 8px; background: transparent; border: 1px dashed var(--linea); border-radius: 4px; color: var(--gris); font: 600 11px var(--mono); cursor: pointer; }
+  .filmo-lista .pers { font-size: 16.5px; font-style: italic; }
+  .filmo-lista .meta { display: block; font: 11.5px/1.45 var(--mono); color: var(--gris); margin-top: 3px; }
+  .btn-mas-filmo { width: 100%; margin-top: 8px; padding: 9px; background: transparent; border: 1px dashed var(--linea); border-radius: 4px; color: var(--gris); font: 600 11.5px var(--mono); cursor: pointer; }
   .btn-mas-filmo:hover { color: var(--papel); border-color: var(--gris); }
   .turno-box { cursor: pointer; transition: border-color .15s; }
   .turno-box:hover { border-color: var(--ambar); }
@@ -219,10 +309,10 @@
                                       background: transparent; color: var(--papel); border: 1px solid var(--linea); cursor: pointer; }
   .pregunta button:active { background: var(--linea); }
   .pregunta input { flex: 1; min-width: 0; cursor: text; letter-spacing: 0; font-weight: 400; }
-  .pregunta .nota { font: 11px/1.5 var(--mono); color: var(--gris); margin-top: 10px; }
+  .pregunta .nota { font: 11.5px/1.55 var(--mono); color: var(--gris); margin-top: 10px; }
   .pregunta .gracias { font-style: italic; font-size: 17px; }
   footer a { color: var(--gris); text-underline-offset: 3px; }
-  footer { margin-top: auto; padding-top: 40px; font: 11px/1.6 var(--mono); color: var(--gris); text-align: center; letter-spacing: .04em; }
+  footer { margin-top: auto; padding-top: 40px; font: 11.5px/1.6 var(--mono); color: var(--gris); text-align: center; letter-spacing: .04em; }
 
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 </style>
@@ -231,16 +321,25 @@
 <main id="sala">
   <div class="barra-sup">
     <div class="marca">estavoz<b>.</b></div>
-    <div class="piloto"><i></i><span id="piloto">EN SILENCIO</span></div>
+    <div class="barra-der">
+      <button id="btnHistorial" type="button" class="btn-hist" hidden aria-expanded="false" onclick="alternarHistorial()">Historial</button>
+      <div class="piloto"><i></i><span id="piloto">EN SILENCIO</span></div>
+    </div>
+  </div>
+  <section id="panelHistorial" class="panel-historial" hidden></section>
+  <div id="avisoActualizacion" class="aviso-actualizacion" hidden>
+    <span>Nuevo catálogo de voces disponible</span>
+    <button type="button" onclick="actualizarCatalogo()">Actualizar</button>
   </div>
 
   <h1>¿Quién pone<br><em>esa voz</em><b>?</b></h1>
-  <p class="indicacion">Escribe qué estás viendo, acerca el móvil a la tele y pulsa el botón rojo.</p>
+  <p class="indicacion">Di qué ves, acerca el móvil a la tele y pulsa el botón rojo.</p>
 
   <div class="pista">
     <label for="obra">¿QUÉ ESTÁS VIENDO? <span class="recomendado">MUY RECOMENDADO</span></label>
     <div class="pista-caja">
       <input id="obra" type="text" enterkeyhint="search" autocomplete="off" placeholder="Toy Story, Daryl Dixon, Christian Bale…">
+      <button id="btnLimpiarObra" type="button" class="btn-limpiar-obra" title="Limpiar película o serie" aria-label="Limpiar">✕</button>
       <button id="btnVozObra" type="button" class="btn-voz-obra" title="Dictar película o serie por voz" aria-label="Dictar por voz">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
       </button>
@@ -248,19 +347,24 @@
     <div class="chips-pista" id="chipsPista">
       <span>Atajos:</span>
       <button type="button" data-obra="Los Simpson">Los Simpson</button>
-      <button type="button" data-obra="Juego de Tronos">Juego de Tronos</button>
+      <button type="button" data-obra="Toy Story">Toy Story</button>
       <button type="button" data-obra="Harry Potter">Harry Potter</button>
-      <button type="button" data-obra="El Señor de los Anillos">El Señor de los Anillos</button>
       <button type="button" data-obra="Friends">Friends</button>
+      <button type="button" data-obra="Juego de Tronos">Juego de Tronos</button>
       <button type="button" data-obra="Marvel">Marvel</button>
       <button type="button" data-obra="Disney">Disney</button>
-      <button type="button" data-obra="Toy Story">Toy Story</button>
+      <button type="button" data-obra="El Señor de los Anillos">El Señor de los Anillos</button>
       <button type="button" data-obra="Los Vengadores">Los Vengadores</button>
       <button type="button" data-obra="Star Wars">Star Wars</button>
       <button type="button" data-obra="The Walking Dead">The Walking Dead</button>
     </div>
+    <div id="pistasActivasWrap" class="pistas-activas" hidden></div>
     <div class="sugerencias" id="sugerencias"></div>
-    <div class="nota" id="notaObra">Película, serie, personaje o actor original. Con esto acierta casi siempre.</div>
+    <div class="nota" id="notaObra">Película, serie, doblador, personaje o actor original. Con esto acierta casi siempre.</div>
+    <div id="repartoPistaWrap" class="reparto-pista-wrap" hidden>
+      <button type="button" id="btnRepartoPista" class="btn-reparto-toggle" onclick="alternarRepartoPista()"></button>
+      <div id="listaRepartoPista" class="reparto-chips" hidden></div>
+    </div>
   </div>
 
   <div class="escena">
@@ -274,10 +378,12 @@
     </button>
   </div>
   <div class="tc" id="tc">00:00:10:00</div>
+  <canvas id="onda" width="240" height="26"></canvas>
   <div class="vu" id="vu"></div>
 
   <div id="estado">Preparando la sala…</div>
   <div class="carga" id="carga"><div></div></div>
+  <div class="nota-carga" id="notaCarga">Descarga única en tu móvil para analizar el audio sin enviarlo fuera.</div>
   <div class="subir">o <label for="fichero">sube un audio</label><input type="file" id="fichero" accept="audio/*,video/*" hidden></div>
 
   <section id="resultados" aria-live="polite"></section>
@@ -310,18 +416,14 @@ const codigo = seg => {
   return `00:00:${d(Math.floor(f / FPS))}:${d(f % FPS)}`;
 };
 
-let sesion, ldaMu, ldaW, centroides, trozos, actores, dim, umbrales;
 let sesion, ldaMu, ldaW, centroides, trozos, actores, dim, umbrales, cohorteMu, cohorteSd;
 const UMBRALES_DEFECTO = {
-  umbral_fiable: 0.3663, umbral_dudoso: 0.252, margen_fiable: 0.1115, margen_dudoso: 0.0502,
-  z_fiable: 5.3001, descuento_contexto_max: 0.035, umbral_1a1_fiable: 0.337, umbral_1a1_dudoso: 0.2319,
   umbral_fiable: 0.5087, umbral_dudoso: 0.4756, margen_fiable: 0.1438, margen_dudoso: 0.0647,
   z_fiable: 5.3457, descuento_contexto_max: 0.035, umbral_1a1_fiable: 0.4756, umbral_1a1_dudoso: 0.4376,
   beta_exceso_trozos: 0.012
 };
 
 // Almacenamiento persistente en navegador (CacheStorage) para arranque instantáneo (<200 ms) tras la 1ª visita
-const CACHE_ARTEFACTOS = 'estavoz-v3-artefactos';
 const CACHE_ARTEFACTOS = 'estavoz-v4-artefactos';
 
 async function descargar(url, alAvanzar = () => {}) {
@@ -384,25 +486,33 @@ async function cargar() {
     dim = meta.dim; actores = meta.actores; umbrales = { ...UMBRALES_DEFECTO, ...(meta.umbrales_rechazo || {}) };
     ldaMu = new Float32Array(lda, 0, dim); ldaW = new Float32Array(lda, dim * 4);
     centroides = new Float32Array(cent);
-    // Estadísticas de cohorte por actor sobre sus 50 vecinos más cercanos (para AS-Norm contra actores imán)
+    // Estadísticas de cohorte por actor sobre sus 50 vecinos más cercanos (matriz simétrica -> mitad de cálculo)
     const nA_c = actores.length;
     cohorteMu = new Float32Array(nA_c); cohorteSd = new Float32Array(nA_c);
     const kVec = Math.min(50, Math.max(1, nA_c - 1));
+    const simMat = new Float32Array(nA_c * nA_c);
     for (let i = 0; i < nA_c; i++) {
-      const sims = [];
       const oi = i * dim;
-      for (let j = 0; j < nA_c; j++) {
-        if (i === j) continue;
+      for (let j = i + 1; j < nA_c; j++) {
         let s = 0, oj = j * dim;
         for (let d_i = 0; d_i < dim; d_i++) s += centroides[oi + d_i] * centroides[oj + d_i];
-        sims.push(s);
+        simMat[i * nA_c + j] = s;
+        simMat[j * nA_c + i] = s;
       }
-      sims.sort((a, b) => b - a);
-      const topK = sims.slice(0, kVec);
-      const muK = topK.reduce((a, b) => a + b, 0) / topK.length;
-      const sdK = Math.sqrt(topK.reduce((a, x) => a + (x - muK) * (x - muK), 0) / topK.length);
+    }
+    const filaTmp = new Float32Array(Math.max(0, nA_c - 1));
+    for (let i = 0; i < nA_c; i++) {
+      const base = i * nA_c;
+      let p = 0;
+      for (let j = 0; j < nA_c; j++) if (j !== i) filaTmp[p++] = simMat[base + j];
+      filaTmp.sort((a, b) => b - a);
+      let suma = 0;
+      for (let t = 0; t < kVec; t++) suma += filaTmp[t];
+      const muK = suma / kVec;
+      let varSuma = 0;
+      for (let t = 0; t < kVec; t++) { const d = filaTmp[t] - muK; varSuma += d * d; }
       cohorteMu[i] = muK;
-      cohorteSd[i] = Math.max(sdK, 1e-4);
+      cohorteSd[i] = Math.max(Math.sqrt(varSuma / kVec), 1e-4);
     }
     // todas las huellas de cada actor (exportar_web.py): inicio por actor, escala y valores en int8
     const nA = actores.length + 1, inicio = new Uint32Array(troz, 0, nA);
@@ -411,69 +521,185 @@ async function cargar() {
     for (let i = 0; i < n; i++) for (let k = 0, o = i * dim; k < dim; k++) v[o + k] = q8[o + k] * escala[i];
     trozos = { inicio, v };
     $('carga').remove();
+    const notaC = $('notaCarga');
+    if (notaC) notaC.remove();
     estado.textContent = 'Sala lista. Cuando quieras.';
     btn.disabled = false;
-    // Pre-cargar la base de datos de películas y series en segundo plano cuando la CPU esté libre
-    if (window.requestIdleCallback) requestIdleCallback(() => cargarBusqueda());
-    else setTimeout(cargarBusqueda, 1200);
+    abrirEnlaceInicial();
+    // Pre-cargar el índice ligero y comprobar actualizaciones en segundo plano cuando la CPU esté libre
+    const tareasOciosas = () => { cargarBusquedaTop(); comprobarActualizacionCatalogo(); };
+    if (window.requestIdleCallback) requestIdleCallback(tareasOciosas);
+    else setTimeout(tareasOciosas, 1200);
   } catch (e) {
     console.error(e);
     estado.textContent = 'No se pudo preparar la sala. Recarga la página.';
   }
 }
 
-// Cualquier audio -> mono 16 kHz con filtrado de retumbes y ruido sub-grave (paso alto 85 Hz)
+const CATALOGO_TAG_KEY = 'estavoz-catalogo-tag-v1';
+async function comprobarActualizacionCatalogo() {
+  if (typeof fetch !== 'function' || !('caches' in window) || !navigator.onLine) return;
+  try {
+    const r = await fetch('datos/actores.json', { method: 'HEAD', cache: 'no-store' });
+    if (!r.ok) return;
+    const tag = `${r.headers.get('etag') || ''}|${r.headers.get('content-length') || ''}|${r.headers.get('last-modified') || ''}`;
+    if (!tag.replace(/\|/g, '')) return;
+    const prev = window.localStorage ? localStorage.getItem(CATALOGO_TAG_KEY) : null;
+    if (!prev) {
+      if (window.localStorage) localStorage.setItem(CATALOGO_TAG_KEY, tag);
+    } else if (prev !== tag) {
+      const av = $('avisoActualizacion');
+      if (av) av.hidden = false;
+    }
+  } catch {}
+}
+
+async function actualizarCatalogo() {
+  try {
+    if ('caches' in window) await caches.delete(CACHE_ARTEFACTOS);
+    if (window.localStorage) localStorage.removeItem(CATALOGO_TAG_KEY);
+  } catch {}
+  location.reload();
+}
+
+// Cadena paso-banda (85 Hz - 7500 Hz) para limpiar retumbes y siseo de alta frecuencia
+function conectarFiltroBanda(ctxAudio, src, dest) {
+  if (typeof ctxAudio.createBiquadFilter !== 'function') {
+    src.connect(dest);
+    return;
+  }
+  const pasoAlto = ctxAudio.createBiquadFilter();
+  pasoAlto.type = 'highpass';
+  pasoAlto.frequency.value = 85;
+  pasoAlto.Q.value = 0.707;
+  const pasoBajo = ctxAudio.createBiquadFilter();
+  pasoBajo.type = 'lowpass';
+  pasoBajo.frequency.value = 7500;
+  pasoBajo.Q.value = 0.707;
+  src.connect(pasoAlto);
+  pasoAlto.connect(pasoBajo);
+  pasoBajo.connect(dest);
+}
+
+// Cualquier audio -> mono 16 kHz con filtrado paso-banda vocal útil (85 - 7500 Hz)
 async function a16k(blob) {
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
   const buf = await ctx.decodeAudioData(await blob.arrayBuffer());
   ctx.close();
   const off = new OfflineAudioContext(1, Math.ceil(buf.duration * SR), SR);
   const src = off.createBufferSource(); src.buffer = buf;
-  const filtro = off.createBiquadFilter();
-  filtro.type = 'highpass';
-  filtro.frequency.value = 85;
-  filtro.Q.value = 0.707;
-  src.connect(filtro);
-  filtro.connect(off.destination);
+  conectarFiltroBanda(off, src, off.destination);
   src.start();
   return (await off.startRendering()).getChannelData(0);
 }
 
-// Detector de Actividad de Voz (VAD) acústico adaptativo en el navegador:
-// analiza tramas de 30 ms (energía RMS y tasa de paso por cero ZCR) frente al ruido de fondo,
-// descartando silencios y música instrumental antes de calcular la huella neuronal.
-function analizarVAD(audio, sr = SR) {
-  const tamTrama = Math.round(sr * 0.030); // 30 ms (480 muestras a 16 kHz)
-  const pasoTrama = Math.round(sr * 0.015); // 15 ms (240 muestras a 16 kHz)
-  const nTramas = Math.max(0, Math.floor((audio.length - tamTrama) / pasoTrama)) + 1;
-  if (nTramas === 0) return { duracionTotal: 0, duracionVoz: 0, segmentos: [], turnos: [], esValida: false };
+// Filtro banda vocal (100 - 3500 Hz) para distinguir habla humana de ruido blanco, retumbes y música grave/aguda
+function filtrarBandaVocal(audio, sr = SR) {
+  const dt = 1 / sr;
+  const rcHp = 1 / (2 * Math.PI * 100), aHp = rcHp / (rcHp + dt);
+  const rcLp = 1 / (2 * Math.PI * 3500), aLp = dt / (rcLp + dt);
+  const out = new Float32Array(audio.length);
+  let yh = 0, xp = 0, yl1 = 0, yl2 = 0;
+  for (let i = 0; i < audio.length; i++) {
+    const xi = audio[i];
+    yh = aHp * (yh + xi - xp);
+    xp = xi;
+    yl1 += aLp * (yh - yl1);
+    yl2 += aLp * (yl1 - yl2);
+    out[i] = yl2;
+  }
+  return out;
+}
 
+// Estimación rápida del tono fundamental F0 (Hz) por autocorrelación prefiltrada, interpolación parabólica y mediana ponderada por claridad
+function estimarF0(audio, sr = SR) {
+  if (!audio || audio.length < sr * 0.2) return null;
+  const senal = filtrarBandaVocal(audio, sr);
+  const tam = Math.round(sr * 0.035), paso = Math.round(sr * 0.025);
+  const lagMin = Math.max(2, Math.floor(sr / 340)), lagMax = Math.min(tam - 2, Math.ceil(sr / 75));
+  const lagInf = Math.max(1, lagMin - 1), lagSup = Math.min(tam - 2, lagMax + 1);
+  const corr = new Float32Array(tam);
+  const muestrasF0 = [];
+  for (let o = 0; o + tam <= senal.length && muestrasF0.length < 40; o += paso) {
+    let e0 = 0;
+    for (let j = 0; j < tam; j++) e0 += senal[o + j] * senal[o + j];
+    if (e0 < 1e-5) continue;
+    let mejorLag = 0, mejorR = 0;
+    for (let lag = lagInf; lag <= lagSup; lag++) {
+      let s = 0, e1 = 0, e2 = 0;
+      for (let j = 0; j < tam - lag; j++) {
+        const a = senal[o + j], b = senal[o + j + lag];
+        s += a * b; e1 += a * a; e2 += b * b;
+      }
+      const r = s / (Math.sqrt(e1 * e2) + 1e-9);
+      corr[lag] = r;
+      if (lag >= lagMin && lag <= lagMax && r > mejorR) { mejorR = r; mejorLag = lag; }
+    }
+    if (mejorR >= 0.40 && mejorLag > 0) {
+      const alfa = corr[mejorLag - 1], beta = corr[mejorLag], gamma = corr[mejorLag + 1];
+      const denom = 2 * (2 * beta - alfa - gamma);
+      const delta = Math.abs(denom) > 1e-8 ? Math.max(-0.5, Math.min(0.5, (alfa - gamma) / denom)) : 0;
+      const f0 = sr / (mejorLag + delta);
+      if (f0 >= 75 && f0 <= 340) muestrasF0.push({ f0, w: mejorR * mejorR });
+    }
+  }
+  if (muestrasF0.length < 3) return null;
+  muestrasF0.sort((a, b) => a.f0 - b.f0);
+  const wTot = muestrasF0.reduce((s, x) => s + x.w, 0);
+  let acum = 0;
+  for (const m of muestrasF0) {
+    acum += m.w;
+    if (acum >= 0.5 * wTot) return m.f0;
+  }
+  return muestrasF0[Math.floor(muestrasF0.length / 2)].f0;
+}
+
+// Detector de Actividad de Voz (VAD) espectral y adaptativo en el navegador:
+// analiza energía RMS, ZCR y concentración en banda vocal (100 - 3500 Hz) con protección para habla continua.
+function analizarVAD(audio, sr = SR) {
+  const tamTrama = Math.round(sr * 0.030); // 30 ms
+  const pasoTrama = Math.round(sr * 0.015); // 15 ms
+  const nTramas = Math.max(0, Math.floor((audio.length - tamTrama) / pasoTrama)) + 1;
+  if (nTramas === 0) return { duracionTotal: 0, duracionVoz: 0, segmentos: [], turnos: [], esValida: false, motivo: 'silencio', medVoc: 0, p90Db: -60, snrDb: 0 };
+
+  const vocal = filtrarBandaVocal(audio, sr);
   const energiasDb = new Float32Array(nTramas);
   const zcrs = new Float32Array(nTramas);
+  const ratiosVocal = new Float32Array(nTramas);
 
   for (let i = 0; i < nTramas; i++) {
     const o = i * pasoTrama;
-    let sumSq = 0, cruces = 0, prevSign = audio[o] >= 0;
+    let sumSq = 0, sumVoc = 0, cruces = 0, prevSign = audio[o] >= 0;
     for (let j = 0; j < tamTrama; j++) {
-      const v = audio[o + j];
+      const v = audio[o + j], vv = vocal[o + j];
       sumSq += v * v;
+      sumVoc += vv * vv;
       const s = v >= 0;
       if (s !== prevSign) { cruces++; prevSign = s; }
     }
     const rms = Math.sqrt(sumSq / tamTrama + 1e-12);
     energiasDb[i] = 20 * Math.log10(Math.max(rms, 1e-6));
     zcrs[i] = cruces / tamTrama;
+    ratiosVocal[i] = sumSq > 1e-10 ? sumVoc / sumSq : 0;
   }
 
-  // Estimar el percentil 15 de energía como suelo de ruido acústico
-  const ordenadas = Float32Array.from(energiasDb).sort();
-  const sueloRuidoDb = ordenadas[Math.floor(ordenadas.length * 0.15)] || -60;
+  // Suelo de ruido (p10) con protección para monólogos continuos sin pausas largas
+  const ordDb = Float32Array.from(energiasDb).sort();
+  const ordVoc = Float32Array.from(ratiosVocal).sort();
+  const ordZcr = Float32Array.from(zcrs).sort();
+  const p10Db = ordDb[Math.floor(ordDb.length * 0.10)] ?? -60;
+  const p50Db = ordDb[Math.floor(ordDb.length * 0.50)] ?? -60;
+  const p90Db = ordDb[Math.floor(ordDb.length * 0.90)] ?? -60;
+  const medVoc = ordVoc[Math.floor(ordVoc.length * 0.50)] ?? 0;
+  const medZcr = ordZcr[Math.floor(ordZcr.length * 0.50)] ?? 0;
+  const esVozContinua = (p90Db - p10Db) < 12 && p50Db >= -34 && medVoc >= 0.45 && medZcr >= 0.005 && medZcr <= 0.42;
+  const sueloRuidoDb = esVozContinua ? Math.min(p10Db, -34.0) : p10Db;
   const umbralActivoDb = Math.max(sueloRuidoDb + 7.5, -48.0);
 
-  // Clasificación por trama (energía superior al suelo y ZCR típico de formantes vocales)
+  // Clasificación por trama: energía + ZCR vocal (incluyendo voces muy graves) + banda vocal
   const activas = new Uint8Array(nTramas);
   for (let i = 0; i < nTramas; i++) {
-    if (energiasDb[i] >= umbralActivoDb && zcrs[i] >= 0.01 && zcrs[i] <= 0.45) {
+    if (energiasDb[i] >= umbralActivoDb && zcrs[i] >= 0.005 && zcrs[i] <= 0.45 && ratiosVocal[i] >= 0.36) {
       activas[i] = 1;
     }
   }
@@ -539,18 +765,27 @@ function analizarVAD(audio, sr = SR) {
     turnos.push({ muestras: juntarSegmentos(audio, bloque), dur: durBloque, iniSeg: bloque[0].iniM / sr, finSeg: segPrev.finM / sr });
   }
 
+  const esValida = duracionVoz >= 1.5;
+  let motivo = 'ok';
+  if (!esValida) {
+    if (p90Db < -43) motivo = 'silencio';
+    else if (medVoc < 0.36) motivo = 'musica_ruido';
+    else motivo = 'corto';
+  }
   return {
     duracionTotal,
     duracionVoz,
     proporcionVoz: duracionVoz / Math.max(duracionTotal, 1e-5),
     segmentos,
     turnos,
-    esValida: duracionVoz >= 1.5
+    esValida,
+    motivo,
+    medVoc,
+    p90Db,
+    snrDb: p90Db - p10Db,
   };
 }
 
-function juntarSegmentos(audio, segs) {
-  const total = segs.reduce((a, s) => a + (s.finM - s.iniM), 0);
 function juntarSegmentos(audio, segs, fadeSeg = 0.010) {
   if (!segs.length) return new Float32Array(0);
   if (segs.length === 1) return audio.slice(segs[0].iniM, segs[0].finM);
@@ -570,11 +805,78 @@ function juntarSegmentos(audio, segs, fadeSeg = 0.010) {
   const total = partes.reduce((a, p) => a + p.length, 0);
   const out = new Float32Array(total);
   let o = 0;
-  for (const s of segs) {
-    out.set(audio.subarray(s.iniM, s.finM), o);
-    o += (s.finM - s.iniM);
-  }
   for (const p of partes) { out.set(p, o); o += p.length; }
+  return out;
+}
+
+// Realce adaptativo de voz lejana (Spectral Tilt) y puerta suave contra música/ruido estacionario entre sílabas
+function realzarVozLejana(audio, sr = SR) {
+  if (!audio || audio.length < sr * 0.1) return audio;
+  const n = audio.length;
+  let eTot = 0, r1Num = 0;
+  for (let i = 0; i < n; i++) {
+    const v = audio[i];
+    eTot += v * v;
+    if (i > 0) r1Num += v * audio[i - 1];
+  }
+  if (eTot < 1e-10) return audio;
+  let out = new Float32Array(n);
+  const r1 = r1Num / (eTot + 1e-12);
+  if (r1 > 0.82) {
+    const alfa = Math.min(0.35, Math.max(0, (r1 - 0.80) * 1.4));
+    out[0] = audio[0];
+    let ePre = out[0] * out[0];
+    for (let i = 1; i < n; i++) {
+      const y = audio[i] - alfa * audio[i - 1];
+      out[i] = y;
+      ePre += y * y;
+    }
+    const esc = Math.sqrt(eTot / Math.max(ePre, 1e-12));
+    for (let i = 0; i < n; i++) out[i] *= esc;
+  } else {
+    out.set(audio);
+  }
+
+  const tam = Math.round(sr * 0.020);
+  const nTr = Math.floor(n / tam);
+  if (nTr >= 6) {
+    const voc = filtrarBandaVocal(out, sr);
+    const rmsT = new Float32Array(nTr);
+    const ratV = new Float32Array(nTr);
+    for (let k = 0; k < nTr; k++) {
+      const o = k * tam;
+      let sq = 0, sv = 0;
+      for (let j = 0; j < tam; j++) {
+        const x = out[o + j], vx = voc[o + j];
+        sq += x * x;
+        sv += vx * vx;
+      }
+      rmsT[k] = Math.sqrt(sq / tam + 1e-12);
+      ratV[k] = sq > 1e-10 ? sv / sq : 0;
+    }
+    const ordRms = Float32Array.from(rmsT).sort();
+    const p15 = ordRms[Math.floor(nTr * 0.15)] || 0;
+    const g = new Float32Array(nTr);
+    for (let k = 0; k < nTr; k++) {
+      if (rmsT[k] < 1.5 * p15 && ratV[k] < 0.38) g[k] = 0.35;
+      else if (ratV[k] < 0.25) g[k] = 0.55;
+      else g[k] = 1.0;
+    }
+    const gSuave = new Float32Array(nTr);
+    for (let k = 0; k < nTr; k++) {
+      const g0 = g[Math.max(0, k - 1)], g1 = g[k], g2 = g[Math.min(nTr - 1, k + 1)];
+      gSuave[k] = 0.25 * g0 + 0.50 * g1 + 0.25 * g2;
+    }
+    gSuave[0] = Math.max(gSuave[0], 0.5);
+    gSuave[nTr - 1] = Math.max(gSuave[nTr - 1], 0.5);
+    for (let i = 0; i < n; i++) {
+      const pos = i / tam - 0.5;
+      const k0 = Math.max(0, Math.min(nTr - 1, Math.floor(pos)));
+      const k1 = Math.min(nTr - 1, k0 + 1);
+      const frac = Math.max(0, Math.min(1, pos - k0));
+      out[i] *= gSuave[k0] + frac * (gSuave[k1] - gSuave[k0]);
+    }
+  }
   return out;
 }
 
@@ -585,8 +887,29 @@ function normalizarPico(audio, objetivo = 0.75) {
     if (v > pico) pico = v;
   }
   if (pico < 1e-4) return audio;
-  const factor = objetivo / pico;
+  let p98 = pico;
+  if (audio.length >= 100) {
+    const paso = Math.max(1, Math.floor(audio.length / 2000));
+    const muestras = [];
+    for (let i = 0; i < audio.length; i += paso) muestras.push(Math.abs(audio[i]));
+    muestras.sort((a, b) => a - b);
+    p98 = muestras[Math.min(muestras.length - 1, Math.floor(muestras.length * 0.98))] || pico;
+  }
   const out = new Float32Array(audio.length);
+  if (p98 > 1e-4 && pico > 3.0 * p98) {
+    const escBase = 2.0 * p98;
+    let picoComp = 0;
+    for (let i = 0; i < audio.length; i++) {
+      const v = escBase * Math.tanh(audio[i] / escBase);
+      out[i] = v;
+      const av = Math.abs(v);
+      if (av > picoComp) picoComp = av;
+    }
+    const factor = objetivo / Math.max(picoComp, 1e-5);
+    for (let i = 0; i < audio.length; i++) out[i] *= factor;
+    return out;
+  }
+  const factor = objetivo / pico;
   for (let i = 0; i < audio.length; i++) out[i] = audio[i] * factor;
   return out;
 }
@@ -594,21 +917,33 @@ function normalizarPico(audio, objetivo = 0.75) {
 async function huellaTrozo(t) {
   const r = await sesion.run({ wav: new ort.Tensor('float32', t, [1, t.length]) });
   const v = r.huella.data, n = Math.hypot(...v);
-  return Float32Array.from(v, x => x / n);
   const h = Float32Array.from(v, x => x / n);
-  h.durPeso = Math.sqrt(Math.max(1, t.length / SR));
+  const vocal = filtrarBandaVocal(t, SR);
+  let sumSq = 0, sumVoc = 0;
+  for (let i = 0; i < t.length; i++) {
+    sumSq += t[i] * t[i];
+    sumVoc += vocal[i] * vocal[i];
+  }
+  const ratioVoc = sumSq > 1e-10 ? sumVoc / sumSq : 0;
+  const calidad = 0.75 + 0.5 * Math.min(1, Math.max(0, (ratioVoc - 0.35) / 0.45));
+  h.durPeso = Math.sqrt(Math.max(1, t.length / SR)) * calidad;
   return h;
 }
 
 async function huellasDe(audio) {
   audio = audio.subarray(0, MAX_CONSULTA);
   if (audio.length < TROZO_MIN) return [];
-  // Ventanas equilibradas (>= 6 s cuando hay audio suficiente) evitando colas cortas ruidosas
-  if (audio.length <= 11 * SR) {
+  // Tomas cortas (<= 7.5 s): 1 sola huella para respetar la escala mínima
+  if (audio.length <= 7.5 * SR) {
     return [await huellaTrozo(audio)];
   }
   const ventanas = [];
-  if (audio.length <= 18 * SR) {
+  // Tomas estándar (7.5 - 11 s): alinear con los trozos de 6 s del índice mediante 2 ventanas solapadas
+  if (audio.length <= 11 * SR) {
+    const w6 = 6 * SR;
+    ventanas.push(audio.slice(0, w6), audio.slice(audio.length - w6));
+    if (self.crossOriginIsolated) ventanas.push(audio);
+  } else if (audio.length <= 18 * SR) {
     const mitad = Math.floor(audio.length / 2);
     ventanas.push(audio.slice(0, Math.min(audio.length, mitad + SR)), audio.slice(Math.max(0, mitad - SR)));
   } else {
@@ -619,25 +954,16 @@ async function huellasDe(audio) {
     }
   }
   const out = [];
-  for (let i = 0; i < audio.length; i += TROZO) {
-    const t = audio.slice(i, i + TROZO);
-    if (t.length >= TROZO_MIN) out.push(await huellaTrozo(t));
-  }
   for (const t of ventanas) out.push(await huellaTrozo(t));
   return out;
 }
 
-// Audio crudo del micrófono (a la frecuencia del móvil) -> mono 16 kHz con filtro paso alto 85 Hz
+// Audio crudo del micrófono (a la frecuencia del móvil) -> mono 16 kHz con filtro paso-banda 85 - 7500 Hz
 async function remuestrear(datos, tasa) {
   const off = new OfflineAudioContext(1, Math.ceil(datos.length * SR / tasa), SR);
   const buf = off.createBuffer(1, datos.length, tasa); buf.copyToChannel(datos, 0);
   const src = off.createBufferSource(); src.buffer = buf;
-  const filtro = off.createBiquadFilter();
-  filtro.type = 'highpass';
-  filtro.frequency.value = 85;
-  filtro.Q.value = 0.707;
-  src.connect(filtro);
-  filtro.connect(off.destination);
+  conectarFiltroBanda(off, src, off.destination);
   src.start();
   return (await off.startRendering()).getChannelData(0);
 }
@@ -654,39 +980,55 @@ function proyectar(q) {
   return p.map(v => v / n);
 }
 
-// Parecido de la grabación con cada actor: media entre el parecido con su huella media y con
-// sus 3 trozos más parecidos (solo con los candidatos, si se ha dicho qué se está viendo)
-// Parecido de la grabación con cada actor: media ponderada por duración entre el centroide y
-// sus 4 trozos más parecidos, más ajuste AS-Norm contra actores imán (hubness)
-function puntuar(consulta, top = 3, candidatos = null) {
+const PESOS_RANGO_TOP4 = [0.34, 0.27, 0.21, 0.18];
+
+// Parecido de la grabación con cada actor: media ponderada por duración, coherencia y pureza vocal
+// entre el centroide y sus 4 trozos más parecidos (con decaimiento por rango), AS-Norm, prior F0 y vecindad k-NN
+function puntuar(consulta, top = 3, candidatos = null, f0Consulta = null) {
   const pesos = consulta.map(q => q.durPeso || 1);
-  const sumaPesos = pesos.reduce((a, b) => a + b, 0) || 1;
   const qs = consulta.map(proyectar);
-  const indices = candidatos ? [...candidatos] : actores.map((_, i) => i);
-  const parecido = (vs, o) => { let s = 0; for (const q of qs) for (let k = 0; k < dim; k++) s += q[k] * vs[o + k]; return s / qs.length; };
-  const beta = (umbrales && umbrales.beta_exceso_trozos) || 0;
-  const lista = indices.map(i => {
-  const parecido = (vs, o) => {
-    let s = 0;
-    for (let qi = 0; qi < qs.length; qi++) {
-      const q = qs[qi];
-      let dot = 0;
-      for (let k = 0; k < dim; k++) dot += q[k] * vs[o + k];
-      s += dot * pesos[qi];
+  if (qs.length >= 3) {
+    for (let i = 0; i < qs.length; i++) {
+      let sumaSim = 0;
+      for (let j = 0; j < qs.length; j++) {
+        if (i !== j) sumaSim += cosenoVec(qs[i], qs[j]);
+      }
+      if (sumaSim / (qs.length - 1) < 0.35) pesos[i] *= 0.45;
     }
-    return s / sumaPesos;
+  }
+  const sumaPesos = pesos.reduce((a, b) => a + b, 0) || 1;
+  const qMedia = new Float32Array(dim);
+  for (let qi = 0; qi < qs.length; qi++) {
+    const q = qs[qi], w = pesos[qi] / sumaPesos;
+    for (let k = 0; k < dim; k++) qMedia[k] += q[k] * w;
+  }
+  const parecido = (vs, o) => {
+    let dot = 0;
+    for (let k = 0; k < dim; k++) dot += qMedia[k] * vs[o + k];
+    return dot;
   };
   let lista = actores.map((actor, i) => {
     const media = parecido(centroides, i * dim);
     const p = [];
     for (let t = trozos.inicio[i]; t < trozos.inicio[i + 1]; t++) p.push(parecido(trozos.v, t * dim));
     p.sort((a, b) => b - a);
-    const mejores = p.length ? p.slice(0, 3).reduce((a, b) => a + b) / Math.min(3, p.length) : media;
-    const penal = beta > 0 ? beta * Math.max(0, Math.log(Math.max(p.length, 1) / 12)) : 0;
-    return { ...actores[i], parecido: (media + mejores - penal) / 2 };
     const kTop = Math.min(4, p.length);
-    const mejores = kTop ? p.slice(0, kTop).reduce((a, b) => a + b, 0) / kTop : media;
-    return { ...actor, _idx: i, parecido: 0.5 * (media + mejores) };
+    let sumaM = 0, sumaW = 0;
+    for (let r = 0; r < kTop; r++) {
+      const w = PESOS_RANGO_TOP4[r];
+      sumaM += p[r] * w;
+      sumaW += w;
+    }
+    const mejores = kTop ? sumaM / sumaW : media;
+    let penalF0 = 0;
+    if (f0Consulta && actor.f0) {
+      if ((f0Consulta < 118 && actor.f0 > 215) || (f0Consulta > 215 && actor.f0 < 118)) {
+        penalF0 = 0.035;
+      } else if ((f0Consulta < 130 && actor.f0 >= 210) || (f0Consulta > 190 && actor.f0 <= 115)) {
+        penalF0 = 0.020;
+      }
+    }
+    return { ...actor, _idx: i, _maxTrozo: p.length ? p[0] : media, parecido: 0.5 * (media + mejores) - penalF0 };
   });
   if (lista.length >= 8 && cohorteMu && cohorteSd) {
     const ordenRaw = lista.map(x => x.parecido).sort((a, b) => b - a);
@@ -704,8 +1046,49 @@ function puntuar(consulta, top = 3, candidatos = null) {
     lista = lista.filter(x => candSet.has(x._idx));
   }
   lista.sort((x, y) => y.parecido - x.parecido);
+  if (lista.length >= 2 && (lista[0].parecido - lista[1].parecido) < 0.035) {
+    const m0 = lista[0]._maxTrozo ?? lista[0].parecido;
+    const m1 = lista[1]._maxTrozo ?? lista[1].parecido;
+    const diffMax = 0.035 * (m1 - m0);
+    let bonoVec = 0;
+    if (centroides && lista.length >= 4) {
+      const kVec = Math.min(10, lista.length);
+      const o0 = lista[0]._idx * dim, o1 = lista[1]._idx * dim;
+      let sumV0 = 0, sumV1 = 0;
+      for (let r = 2; r < kVec; r++) {
+        const or = lista[r]._idx * dim;
+        for (let k = 0; k < dim; k++) {
+          const cv = centroides[or + k];
+          sumV0 += centroides[o0 + k] * cv;
+          sumV1 += centroides[o1 + k] * cv;
+        }
+      }
+      bonoVec = 0.025 * ((sumV1 - sumV0) / (kVec - 2));
+    }
+    if (lista[1].parecido + diffMax + bonoVec > lista[0].parecido) {
+      const sHi = lista[0].parecido, sLo = lista[1].parecido;
+      const primero = lista[1], segundo = lista[0];
+      primero.parecido = Math.max(sHi, sLo + 1e-4);
+      segundo.parecido = Math.min(sLo, sHi - 1e-4);
+      lista[0] = primero;
+      lista[1] = segundo;
+    }
+  }
   const seleccion = lista.slice(0, top);
   seleccion.estado = clasificarConsulta(lista, Boolean(candidatos));
+  if (lista.length >= 2 && centroides && (lista[0].parecido - lista[1].parecido) < 0.065) {
+    const o0 = lista[0]._idx * dim, o1 = lista[1]._idx * dim;
+    let simGem = 0;
+    for (let k = 0; k < dim; k++) simGem += centroides[o0 + k] * centroides[o1 + k];
+    if (simGem >= 0.55) {
+      seleccion.gemeloVocal = {
+        id: lista[1].id,
+        nombre: lista[1].nombre,
+        _idx: lista[1]._idx,
+        simPct: Math.round(simGem * 100),
+      };
+    }
+  }
   return seleccion;
 }
 
@@ -727,7 +1110,6 @@ function clasificarConsulta(ordenada, conContexto = false) {
   }
   let desc = 0;
   if (conContexto && actores.length > 1 && ordenada.length < actores.length) {
-    const ratio = Math.log(Math.max(ordenada.length, 2)) / Math.log(actores.length);
     const ratio = Math.sqrt(Math.log(Math.max(ordenada.length, 2)) / Math.log(actores.length));
     desc = u.descuento_contexto_max * (1 - Math.min(Math.max(ratio, 0), 1));
   }
@@ -741,55 +1123,282 @@ function clasificarConsulta(ordenada, conContexto = false) {
   return 'desconocido';
 }
 
-// "¿Qué estás viendo?": obras, personajes y actores originales con su reparto (despliegue/exportar_web.py)
-const TIPOS = { obra: 'OBRA', personaje: 'PERSONAJE', actor: 'ACTOR ORIGINAL' };
-const plano = t => ' ' + t.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() + ' ';
-let busqueda = null;
-// se descarga al tocar el campo; el texto normalizado se prepara una sola vez
-const cargarBusqueda = () => busqueda ??= fetch('datos/busqueda.json').then(r => r.json())
-  .then(es => es.map(([tipo, texto, ids]) => ({ tipo, texto, ids, plano: plano(texto) })));
+// "¿Qué estás viendo?": índice popular ligero (~900 KB) + fragmentos bajo demanda + dobladores del catálogo
+const TIPOS = { obra: 'OBRA', personaje: 'PERSONAJE', actor: 'ACTOR ORIGINAL', doblador: 'DOBLADOR' };
+const STOP_BUSQUEDA = new Set(['de','del','la','las','el','los','lo','un','una','en','al','con','por','para','sin','the','of','and','in']);
+const STOP_LISTA = [...STOP_BUSQUEDA];
+const bucketBusqueda = p2 => (p2.charCodeAt(0) * 31 + p2.charCodeAt(1)) % 64;
+const plano = t => ' ' + t.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() + ' ';
+const mapearEntradas = es => es.map(([tipo, texto, ids]) => ({ tipo, texto, ids, plano: plano(texto), k: `${tipo}\0${texto}` }));
+
+async function descargarJsonCache(url) {
+  if ('caches' in window) {
+    try {
+      const cache = await caches.open(CACHE_ARTEFACTOS);
+      const guardado = await cache.match(url);
+      if (guardado) return await guardado.json();
+    } catch {}
+  }
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const txt = await r.text();
+  if ('caches' in window) {
+    try {
+      const cache = await caches.open(CACHE_ARTEFACTOS);
+      await cache.put(url, new Response(txt, { headers: { 'Content-Type': 'application/json' } }));
+    } catch {}
+  }
+  return JSON.parse(txt);
+}
+
+let busquedaTop = null, usaMonolitoBusqueda = false;
+const shardsBusqueda = new Map();
+
+const cargarBusquedaTop = () => busquedaTop ??= descargarJsonCache('datos/busqueda_top.json')
+  .then(mapearEntradas)
+  .catch(() => {
+    usaMonolitoBusqueda = true;
+    return descargarJsonCache('datos/busqueda.json').then(mapearEntradas);
+  });
+
+const cargarShardBusqueda = b => {
+  if (!shardsBusqueda.has(b)) {
+    const num = String(b).padStart(2, '0');
+    shardsBusqueda.set(b, descargarJsonCache(`datos/busqueda/${num}.json`).then(mapearEntradas).catch(() => []));
+  }
+  return shardsBusqueda.get(b);
+};
+
+function elegirPalabraShard(ws) {
+  const cands = ws.filter(w => w.length >= 2 && !STOP_LISTA.some(sw => sw.startsWith(w) && w.length <= sw.length));
+  if (!cands.length) return null;
+  return cands.reduce((mejor, w) => (w.length > mejor.length ? w : mejor), cands[0]);
+}
 
 // Entradas cuyo texto contiene todas las palabras escritas (al principio de alguna de sus palabras)
 async function sugerencias(texto, max = 6) {
   const q = plano(texto).trim();
   if (q.length < 2) return [];
   const ws = q.split(' ');
-  const es = await cargarBusqueda();
-  const exactas = [], resto = [];
-  for (const e of es) {
-    if (!ws.every(w => e.plano.includes(' ' + w))) continue;
-    (e.plano.trim() === q ? exactas : resto).push(e);   // primero lo que coincide del todo
-    if (exactas.length + resto.length > 400) break;     // ya están ordenadas por importancia
+  const topEs = await cargarBusquedaTop();
+  let listas = [topEs];
+  if (!usaMonolitoBusqueda) {
+    const wKey = elegirPalabraShard(ws);
+    if (wKey) listas = [topEs, await cargarShardBusqueda(bucketBusqueda(wKey.slice(0, 2)))];
+  }
+  const exactas = [], resto = [], vistos = new Set();
+  for (const es of listas) {
+    for (const e of es) {
+      if (vistos.has(e.k) || !ws.every(w => e.plano.includes(' ' + w))) continue;
+      vistos.add(e.k);
+      (e.plano.trim() === q ? exactas : resto).push(e);
+      if (exactas.length + resto.length > 400) break;
+    }
+    if (exactas.length + resto.length > 400) break;
+  }
+  if (actores && actores.length) {
+    for (let i = 0; i < actores.length; i++) {
+      const a = actores[i];
+      const pNom = plano(a.nombre);
+      if (!ws.every(w => pNom.includes(' ' + w))) continue;
+      const item = { tipo: 'doblador', texto: a.nombre, ids: [i], plano: pNom, k: `doblador\0${a.id}`, numTrabajos: a.num_trabajos || 0 };
+      if (!vistos.has(item.k)) {
+        vistos.add(item.k);
+        (pNom.trim() === q ? exactas : resto).push(item);
+      }
+      if (exactas.length + resto.length > 440) break;
+    }
   }
   return [...exactas, ...resto].slice(0, max);
 }
 
-const obra = $('obra'), notaObra = $('notaObra'), listaSug = $('sugerencias');
-let pistaElegida = null, pistaTimer;
-obra.addEventListener('focus', cargarBusqueda, { once: true });
+const obra = $('obra'), notaObra = $('notaObra'), listaSug = $('sugerencias'), btnLimpiarObra = $('btnLimpiarObra');
+const pistasActivasWrap = $('pistasActivasWrap');
+const repartoWrap = $('repartoPistaWrap'), btnRepartoPista = $('btnRepartoPista'), listaRepartoPista = $('listaRepartoPista');
+let pistaElegida = null, pistasSeleccionadas = [], pistaTimer, repartoAbierto = false;
+const actualizarBotonLimpiar = () => {
+  if (btnLimpiarObra) btnLimpiarObra.style.display = (obra.value.trim() || pistasSeleccionadas.length) ? 'block' : 'none';
+};
+
+function combinarPistas(listaPistas) {
+  if (!listaPistas || !listaPistas.length) return null;
+  if (listaPistas.length === 1) return listaPistas[0];
+  let inter = [...new Set(listaPistas[0].ids)];
+  for (let i = 1; i < listaPistas.length; i++) {
+    const setI = new Set(listaPistas[i].ids);
+    inter = inter.filter(id => setI.has(id));
+  }
+  const textos = listaPistas.map(p => p.texto);
+  if (inter.length > 0) {
+    return { tipo: 'interseccion', texto: textos.join(' + '), ids: inter, partes: listaPistas, vacia: false };
+  }
+  const union = [...new Set(listaPistas.flatMap(p => p.ids))];
+  return { tipo: 'union', texto: textos.join(' + '), ids: union, partes: listaPistas, vacia: true };
+}
+
+function renderPistasActivas() {
+  if (!pistasActivasWrap) return;
+  if (!pistasSeleccionadas.length) {
+    pistasActivasWrap.hidden = true;
+    pistasActivasWrap.innerHTML = '';
+    obra.placeholder = 'Toy Story, Daryl Dixon, Christian Bale…';
+    return;
+  }
+  pistasActivasWrap.hidden = false;
+  pistasActivasWrap.innerHTML = pistasSeleccionadas.map((p, idx) =>
+    `<span class="chip-pista-activa"><span>${esc(p.texto)} (${p.ids.length})</span><button type="button" title="Quitar pista" onclick="quitarPistaActiva(${idx})">✕</button></span>`
+  ).join('');
+  obra.placeholder = pistasSeleccionadas.length < 3
+    ? '+ Añade otra obra o personaje para cruzar repartos…'
+    : 'Máximo de 3 pistas combinadas';
+}
+
+function quitarPistaActiva(idx) {
+  pistasSeleccionadas.splice(idx, 1);
+  pistaElegida = combinarPistas(pistasSeleccionadas);
+  renderPistasActivas();
+  actualizarRepartoUI(pistaElegida);
+  actualizarBotonLimpiar();
+  if (pistaElegida) {
+    notaObra.textContent = pistaElegida.tipo === 'interseccion'
+      ? `Cruzar repartos: ${pistaElegida.ids.length} ${pistaElegida.ids.length === 1 ? 'voz coincide' : 'voces coinciden'} en «${pistaElegida.texto}».`
+      : `Buscaré entre ${pistaElegida.ids.length} ${pistaElegida.ids.length === 1 ? 'voz' : 'voces'} de «${pistaElegida.texto}».`;
+  } else {
+    notaObra.textContent = 'Película, serie, doblador, personaje o actor original. Con esto acierta casi siempre.';
+  }
+  if (ultimaConsulta && !btn.disabled) resolver(ultimaConsulta, ultimoDialogo, ultimaF0);
+}
+
+function actualizarRepartoUI(e) {
+  if (!repartoWrap || !btnRepartoPista || !listaRepartoPista) return;
+  if (!e || e.tipo === 'doblador' || !e.ids || !e.ids.length) {
+    repartoWrap.hidden = true;
+    listaRepartoPista.hidden = true;
+    listaRepartoPista.innerHTML = '';
+    repartoAbierto = false;
+    return;
+  }
+  repartoWrap.hidden = false;
+  repartoAbierto = false;
+  listaRepartoPista.hidden = true;
+  const suf = e.tipo === 'interseccion' ? ' en común' : '';
+  btnRepartoPista.textContent = `Ver reparto (${e.ids.length} ${e.ids.length === 1 ? 'voz' : 'voces'}${suf}) ▾`;
+}
+
+function alternarRepartoPista() {
+  if (!pistaElegida || !repartoWrap || !listaRepartoPista || !actores) return;
+  repartoAbierto = !repartoAbierto;
+  listaRepartoPista.hidden = !repartoAbierto;
+  const suf = pistaElegida.tipo === 'interseccion' ? ' en común' : '';
+  btnRepartoPista.textContent = `Ver reparto (${pistaElegida.ids.length} ${pistaElegida.ids.length === 1 ? 'voz' : 'voces'}${suf}) ${repartoAbierto ? '▴' : '▾'}`;
+  if (!repartoAbierto) return;
+  const ordenados = [...pistaElegida.ids]
+    .filter(idx => actores[idx])
+    .sort((a, b) => (actores[b].num_trabajos || 0) - (actores[a].num_trabajos || 0))
+    .slice(0, 24);
+  listaRepartoPista.innerHTML = ordenados.map(idx =>
+    `<button type="button" onclick="inspeccionarDoblador(${idx})">${esc(actores[idx].nombre)}</button>`
+  ).join('') + (pistaElegida.ids.length > 24 ? `<span class="dato" style="margin:4px 0 0 4px">+${pistaElegida.ids.length - 24} más</span>` : '');
+}
+
+function inspeccionarDoblador(idx) {
+  if (!actores || !actores[idx]) return;
+  const ficha = [{ ...actores[idx], _idx: idx, parecido: 0 }];
+  ficha.estado = 'identificado';
+  ficha.esCatalogo = true;
+  ficha.tieneResultadoPrevio = Boolean(ultimaLista && ultimaLista.length && !ultimaLista.esCatalogo);
+  pintar(ficha);
+}
+
+if (btnLimpiarObra) {
+  btnLimpiarObra.onclick = () => {
+    obra.value = '';
+    pistasSeleccionadas = [];
+    pistaElegida = null;
+    listaSug.innerHTML = '';
+    renderPistasActivas();
+    actualizarRepartoUI(null);
+    actualizarBotonLimpiar();
+    notaObra.textContent = 'Película, serie, doblador, personaje o actor original. Con esto acierta casi siempre.';
+    if (ultimaConsulta && !btn.disabled && ultimaPista) {
+      notaObra.textContent += ' Volviendo a búsqueda abierta…';
+      resolver(ultimaConsulta, ultimoDialogo, ultimaF0);
+    }
+  };
+}
+obra.addEventListener('focus', cargarBusquedaTop, { once: true });
+obra.addEventListener('keydown', ev => {
+  if (ev.key === 'Enter') {
+    const primera = listaSug.querySelector && listaSug.querySelector('button');
+    if (primera) {
+      ev.preventDefault();
+      primera.click();
+    } else if ((obra.value.trim() || pistasSeleccionadas.length) && ultimaConsulta && !btn.disabled) {
+      ev.preventDefault();
+      resolver(ultimaConsulta, ultimoDialogo, ultimaF0);
+    }
+  } else if (ev.key === 'Escape') {
+    listaSug.innerHTML = '';
+  }
+});
 obra.addEventListener('input', () => {
-  pistaElegida = null;
+  actualizarBotonLimpiar();
   clearTimeout(pistaTimer);
   pistaTimer = setTimeout(async () => {
-    if (!obra.value.trim()) { listaSug.innerHTML = ''; notaObra.textContent = 'Película, serie, personaje o actor original. Con esto acierta casi siempre.'; return; }
+    if (!obra.value.trim()) {
+      listaSug.innerHTML = '';
+      pistaElegida = combinarPistas(pistasSeleccionadas);
+      actualizarRepartoUI(pistaElegida);
+      if (!pistaElegida) notaObra.textContent = 'Película, serie, doblador, personaje o actor original. Con esto acierta casi siempre.';
+      return;
+    }
     notaObra.textContent = 'Buscando…';
     const ss = await sugerencias(obra.value);
-    listaSug.innerHTML = ss.map((e, k) => `<button type="button" data-k="${k}">
+    listaSug.innerHTML = ss.map((e, k) => {
+      const nTxt = e.tipo === 'doblador'
+        ? (e.numTrabajos ? `${e.numTrabajos} doblajes` : 'Ver ficha')
+        : `${e.ids.length} ${e.ids.length === 1 ? 'voz' : 'voces'}`;
+      return `<button type="button" data-k="${k}">
         <span class="tipo">${TIPOS[e.tipo]}</span><span class="txt">${esc(e.texto)}</span>
-        <span class="n">${e.ids.length} ${e.ids.length === 1 ? 'voz' : 'voces'}</span></button>`).join('');
+        <span class="n">${nTxt}</span></button>`;
+    }).join('');
     listaSug.querySelectorAll('button').forEach(b => b.onclick = () => elegir(ss[+b.dataset.k]));
-    notaObra.textContent = ss.length ? 'Toca la que sea para afinar todavía más.' : `No encuentro «${obra.value.trim()}»: buscaré entre todas las voces.`;
+    notaObra.textContent = ss.length ? 'Toca la que sea (o pulsa Intro).' : `No encuentro «${obra.value.trim()}»: buscaré entre todas las voces.`;
   }, 200);
 });
 
 function elegir(e) {
-  pistaElegida = e;
-  obra.value = e.texto;
   listaSug.innerHTML = '';
-  notaObra.textContent = `Buscaré entre ${e.ids.length} ${e.ids.length === 1 ? 'voz' : 'voces'} de «${e.texto}».`;
-  obra.blur();
+  if (e.tipo === 'doblador' && e.ids && e.ids.length) {
+    obra.value = e.texto;
+    actualizarBotonLimpiar();
+    notaObra.textContent = `Mostrando ficha y muestra oficial de ${e.texto}.`;
+    if (obra.blur) obra.blur();
+    inspeccionarDoblador(e.ids[0]);
+    return;
+  }
+  if (!pistasSeleccionadas.some(p => p.k === e.k)) {
+    if (pistasSeleccionadas.length >= 3) pistasSeleccionadas.shift();
+    pistasSeleccionadas.push(e);
+  }
+  obra.value = '';
+  pistaElegida = combinarPistas(pistasSeleccionadas);
+  renderPistasActivas();
+  actualizarRepartoUI(pistaElegida);
+  actualizarBotonLimpiar();
+  if (pistaElegida.tipo === 'interseccion') {
+    notaObra.textContent = `Cruzar repartos: ${pistaElegida.ids.length} ${pistaElegida.ids.length === 1 ? 'voz coincide' : 'voces coinciden'} en «${pistaElegida.texto}».`;
+  } else if (pistaElegida.vacia) {
+    notaObra.textContent = `Ninguna voz coincide en todas a la vez; buscando en las ${pistaElegida.ids.length} voces de «${pistaElegida.texto}».`;
+  } else {
+    notaObra.textContent = `Buscaré entre ${pistaElegida.ids.length} ${pistaElegida.ids.length === 1 ? 'voz' : 'voces'} de «${pistaElegida.texto}». Puedes añadir otra obra para cruzar.`;
+  }
+  if (obra.blur) obra.blur();
   // si ya hay una toma, se vuelve a mirar con la pista sin tener que grabar otra vez
-  if (ultimaConsulta && !btn.disabled) { notaObra.textContent += ' Vuelvo a mirar tu última toma…'; resolver(ultimaConsulta); }
+  if (ultimaConsulta && !btn.disabled) {
+    notaObra.textContent += ' Vuelvo a mirar tu última toma…';
+    resolver(ultimaConsulta, ultimoDialogo, ultimaF0);
+  }
 }
 
 function pedirPista() {
@@ -798,13 +1407,22 @@ function pedirPista() {
   notaObra.textContent = 'Escribe qué estás viendo y elige una opción: miraré otra vez la misma toma.';
 }
 
-// Lo escrito sin elegir sugerencia: se juntan los repartos de las que encajan
+// Lo escrito sin elegir sugerencia o combinando varias pistas ("Obra 1 + Obra 2")
 async function pistaActual() {
-  if (pistaElegida) return pistaElegida;
-  if (!obra.value.trim()) return null;
-  const ss = await sugerencias(obra.value, 40);
-  if (!ss.length) return null;
-  return { tipo: 'texto', texto: obra.value.trim(), ids: [...new Set(ss.flatMap(e => e.ids))], partes: ss };
+  const textoLibre = obra.value.trim();
+  const partesTexto = textoLibre ? textoLibre.split(/[+;&]+/).map(s => s.trim()).filter(Boolean) : [];
+  const resueltasTexto = [];
+  for (const pt of partesTexto) {
+    const ss = await sugerencias(pt, 40);
+    if (ss.length) {
+      const exact = ss.find(e => e.tipo !== 'doblador' && e.plano.trim() === plano(pt).trim());
+      if (exact) resueltasTexto.push(exact);
+      else resueltasTexto.push({ tipo: 'texto', texto: pt, ids: [...new Set(ss.flatMap(e => e.ids))], partes: ss });
+    }
+  }
+  const todas = [...pistasSeleccionadas, ...resueltasTexto];
+  if (!todas.length) return pistaElegida;
+  return combinarPistas(todas);
 }
 
 const papelesCache = new Map();
@@ -842,18 +1460,14 @@ async function cargarPapelesActor(actor) {
 }
 
 // Qué papel de este doblador encaja con la pista ("Buzz Lightyear en Toy Story 4")
-async function papelDePista(indice, pista) {
 async function papelDePista(actorOIndice, pista) {
   if (!pista) return null;
   const actor = typeof actorOIndice === 'number' ? actores[actorOIndice] : actorOIndice;
   if (!actor) return null;
   try {
-    const filas = await fetch(`datos/papeles/${indice}.json`).then(r => r.json());
     const filas = await cargarPapelesActor(actor);
     const encaja = (e, [obraT, personaje, , original]) => {
       const q = plano(e.texto).trim();
-      const t = e.tipo === 'obra' ? obraT : e.tipo === 'personaje' ? personaje : original.split(',').reverse().join(' ');
-      return plano(t).includes(' ' + q);
       if (!q) return false;
       const origFmt = (original || '').split(',').reverse().join(' ').trim();
       const t = e.tipo === 'obra' ? obraT : e.tipo === 'personaje' ? personaje : origFmt;
@@ -871,17 +1485,39 @@ async function papelDePista(actorOIndice, pista) {
 const PILOTO = { grabando: 'GRABANDO', analizando: 'ANALIZANDO' };
 function modo(m) { sala.className = m || ''; $('piloto').textContent = PILOTO[m] || 'EN SILENCIO'; }
 
-let ultimoDialogo = null, ultimaLista = null;
+let ultimoDialogo = null, ultimaLista = null, ultimoAudioGrabado = null, ultimoAudioOriginal = null, ultimoAudioActivo = null, ultimaF0 = null, ultimoDiagnostico = null;
+let recorteAbierto = false, recorteIniSeg = 0, recorteFinSeg = 0, caraACaraAbierto = false, idxRivalCaraACara = null;
+const vibrar = p => { if (typeof navigator !== 'undefined' && navigator.vibrate) try { navigator.vibrate(p); } catch {} };
+
+function mediaProyNorm(huellasLista) {
+  const ps = huellasLista.map(proyectar);
+  const m = new Float32Array(dim);
+  for (const p of ps) for (let k = 0; k < dim; k++) m[k] += p[k];
+  const n = Math.hypot(...m) || 1;
+  for (let k = 0; k < dim; k++) m[k] /= n;
+  return m;
+}
+const cosenoVec = (a, b) => { let s = 0; for (let k = 0; k < a.length; k++) s += a[k] * b[k]; return s; };
+
+function rescorarDialogoConPista(dialogo, cands) {
+  if (!dialogo) return null;
+  const r1 = dialogo.consulta1 ? puntuar(dialogo.consulta1, 1, cands, dialogo.f01 ?? null) : [];
+  const r2 = dialogo.consulta2 ? puntuar(dialogo.consulta2, 1, cands, dialogo.f02 ?? null) : [];
+  if (r1.length) dialogo.actor1 = r1[0];
+  if (r2.length) dialogo.actor2 = r2[0];
+  return dialogo;
+}
+
 // Quién es, con la pista si la hay, y la ficha en pantalla
-async function resolver(consulta, dialogo = null) {
+async function resolver(consulta, dialogo = null, f0Consulta = ultimaF0) {
+  ultimaF0 = f0Consulta ?? null;
   const pista = await pistaActual();
   ultimaPista = pista && pista.ids.length ? { texto: pista.texto, n: pista.ids.length } : null;
-  const lista = puntuar(consulta, 3, ultimaPista ? pista.ids : null);
-  lista[0].papelPista = await papelDePista(actores.indexOf(actores.find(a => a.id === lista[0].id)), pista);
-  const lista = puntuar(consulta, 5, ultimaPista ? pista.ids : null);
-  lista[0].papelPista = await papelDePista(lista[0], pista);
-  ultimoDialogo = dialogo;
-  if (dialogo) lista.dialogo = dialogo;
+  const cands = ultimaPista ? pista.ids : null;
+  const lista = puntuar(consulta, 5, cands, ultimaF0);
+  if (lista.length) lista[0].papelPista = await papelDePista(lista[0], pista);
+  ultimoDialogo = rescorarDialogoConPista(dialogo, cands);
+  if (ultimoDialogo) lista.dialogo = ultimoDialogo;
   ultimaLista = lista;
   pintar(lista);
 }
@@ -890,15 +1526,21 @@ function seleccionarVozDialogo(n) {
   if (!ultimoDialogo) return;
   ultimoDialogo.activo = n;
   const consultaElegida = n === 1 ? ultimoDialogo.consulta1 : ultimoDialogo.consulta2;
+  ultimoAudioActivo = (n === 1 ? ultimoDialogo.audio1 : ultimoDialogo.audio2) || ultimoAudioGrabado;
+  const f0Elegida = (n === 1 ? ultimoDialogo.f01 : ultimoDialogo.f02) ?? (ultimoAudioActivo ? estimarF0(ultimoAudioActivo, SR) : null);
+  if (ultimoDiagnostico) {
+    ultimoDiagnostico = { ...ultimoDiagnostico, f0: f0Elegida, duracionVoz: n === 1 ? ultimoDialogo.dur1 : ultimoDialogo.dur2 };
+  }
   if (consultaElegida && consultaElegida.length) {
     ultimaConsulta = consultaElegida;
-    resolver(consultaElegida, ultimoDialogo);
+    resolver(consultaElegida, ultimoDialogo, f0Elegida);
   }
 }
 
-async function identificar(blob, huellasListas = null, audioPreprocesado = null) {
+async function identificar(blob, huellasListas = null, audioPreprocesado = null, esRecorte = false) {
   modo('analizando');
-  estado.textContent = 'Analizando la toma…';
+  detenerReproducciones();
+  estado.textContent = esRecorte ? 'Re-analizando el tramo seleccionado…' : 'Analizando la toma…';
   res.innerHTML = '';
   try {
     let audio = audioPreprocesado;
@@ -906,73 +1548,94 @@ async function identificar(blob, huellasListas = null, audioPreprocesado = null)
       audio = await a16k(blob);
     }
 
-    let consulta, dialogo = null;
+    let consulta, dialogo = null, f0Consulta = null;
     if (audio) {
+      if (!esRecorte) {
+        ultimoAudioOriginal = audio;
+        recorteIniSeg = 0;
+        recorteFinSeg = Math.round((audio.length / SR) * 10) / 10;
+        recorteAbierto = false;
+      }
+      caraACaraAbierto = false;
+      ultimoAudioGrabado = audio;
+      ultimoAudioActivo = audio;
       const vad = analizarVAD(audio, SR);
-      console.log(`[VAD] ${vad.duracionVoz.toFixed(2)}s de voz activa en ${vad.segmentos.length} tramos (total ${vad.duracionTotal.toFixed(2)}s). Válida: ${vad.esValida}`);
+      console.log(`[VAD] ${vad.duracionVoz.toFixed(2)}s de voz activa en ${vad.segmentos.length} tramos (total ${vad.duracionTotal.toFixed(2)}s, voc=${vad.medVoc.toFixed(2)}). Válida: ${vad.esValida}`);
 
       if (!vad.esValida) {
-        estado.textContent = vad.duracionVoz < 0.6
-          ? 'No se ha detectado voz clara (parece silencio o música de fondo).'
-          : `Se detectó muy poca voz (${vad.duracionVoz.toFixed(1)} s). Acerca más el micro al televisor.`;
+        acumulandoToma = false;
+        if (vad.motivo === 'silencio') {
+          estado.textContent = 'No se oye casi señal (silencio o volumen muy bajo). Sube el televisor o acerca el micro.';
+        } else if (vad.motivo === 'musica_ruido') {
+          estado.textContent = 'Predomina música o ruido de fondo sobre la voz. Prueba en una escena con diálogo limpio.';
+        } else {
+          estado.textContent = `Se detectó poca voz clara (${vad.duracionVoz.toFixed(1)} s). Acerca el micro un par de segundos más.`;
+        }
         modo(); aro.style.strokeDashoffset = ARO; tc.textContent = codigo(SEGUNDOS);
         leds.forEach(l => l.classList.remove('on'));
         btn.disabled = false;
         return;
       }
 
-      // Si hay 2 turnos de diálogo separados por pausa (diarización ligera de 2 personajes)
+      // Diarización por similitud mutua entre turnos en espacio LDA antes de consultar galería
       let consultaNueva = null;
-      // Si hay 2+ turnos de diálogo separados por pausa (diarización ligera), evaluamos por hablante
-      // para no mezclar dos voces distintas en una única huella borrosa
-      if (vad.turnos.length >= 2 && vad.turnos[0].dur >= 2.0 && vad.turnos[1].dur >= 2.0) {
-        const h1 = await huellasDe(vad.turnos[0].muestras);
-        const h2 = await huellasDe(vad.turnos[1].muestras);
-        if (h1.length && h2.length) {
-          const pista = await pistaActual();
-          const r1 = puntuar(h1, 1, pista && pista.ids.length ? pista.ids : null);
-          const r2 = puntuar(h2, 1, pista && pista.ids.length ? pista.ids : null);
-          if (r1.length && r2.length && r1[0].id !== r2[0].id && r1[0].parecido >= 0.28 && r2[0].parecido >= 0.28) {
-        const pista = await pistaActual();
-        const cands = pista && pista.ids.length ? pista.ids : null;
+      if (vad.turnos.length >= 2 && vad.turnos[0].dur >= 1.8 && vad.turnos[1].dur >= 1.8) {
         const tMuestras = [];
         for (const tr of vad.turnos.slice(0, 4)) {
-          const ht = await huellasDe(normalizarPico(tr.muestras));
-          if (ht.length) {
-            const rt = puntuar(ht, 1, cands);
-            tMuestras.push({ tr, ht, top: rt[0] });
-          }
+          const ht = await huellasDe(normalizarPico(realzarVozLejana(tr.muestras, SR)));
+          if (ht.length) tMuestras.push({ tr, ht, proy: mediaProyNorm(ht) });
         }
         if (tMuestras.length >= 2) {
-          const g1 = tMuestras[0];
-          const g2 = tMuestras.find(x => x.top.id !== g1.top.id);
-          if (g2 && g1.top.parecido >= 0.38 && g2.top.parecido >= 0.38) {
-            // Agrupar todos los turnos de cada uno de los 2 hablantes
-            const hVoz1 = tMuestras.filter(x => x.top.id === g1.top.id).flatMap(x => x.ht);
-            const hVoz2 = tMuestras.filter(x => x.top.id === g2.top.id).flatMap(x => x.ht);
-            const dur1 = tMuestras.filter(x => x.top.id === g1.top.id).reduce((a, x) => a + x.tr.dur, 0);
-            const dur2 = tMuestras.filter(x => x.top.id === g2.top.id).reduce((a, x) => a + x.tr.dur, 0);
-            dialogo = {
-              actor1: r1[0],
-              actor2: r2[0],
-              dur1: vad.turnos[0].dur,
-              dur2: vad.turnos[1].dur,
-              actor1: g1.top, actor2: g2.top, dur1, dur2,
-              consulta1: hVoz1, consulta2: hVoz2, activo: dur1 >= dur2 ? 1 : 2,
-            };
-            consultaNueva = dur1 >= dur2 ? hVoz1 : hVoz2;
+          let iMin = 0, jMin = 1, simMin = 1;
+          for (let a = 0; a < tMuestras.length; a++) {
+            for (let b = a + 1; b < tMuestras.length; b++) {
+              const s = cosenoVec(tMuestras[a].proy, tMuestras[b].proy);
+              if (s < simMin) { simMin = s; iMin = a; jMin = b; }
+            }
+          }
+          if (simMin < 0.45) {
+            const piv1 = tMuestras[iMin].proy, piv2 = tMuestras[jMin].proy;
+            const g1 = [], g2 = [];
+            for (const tm of tMuestras) {
+              (cosenoVec(tm.proy, piv1) >= cosenoVec(tm.proy, piv2) ? g1 : g2).push(tm);
+            }
+            if (g1.length && g2.length) {
+              const pista = await pistaActual();
+              const cands = pista && pista.ids.length ? pista.ids : null;
+              const hVoz1 = g1.flatMap(x => x.ht), hVoz2 = g2.flatMap(x => x.ht);
+              const dur1 = g1.reduce((a, x) => a + x.tr.dur, 0), dur2 = g2.reduce((a, x) => a + x.tr.dur, 0);
+              const a1 = g1[0].tr.muestras, a2 = g2[0].tr.muestras;
+              const f01 = estimarF0(a1, SR), f02 = estimarF0(a2, SR);
+              const r1 = puntuar(hVoz1, 1, cands, f01);
+              const r2 = puntuar(hVoz2, 1, cands, f02);
+              if (r1.length && r2.length && r1[0].id !== r2[0].id && (r1[0].parecido >= 0.36 || r2[0].parecido >= 0.36)) {
+                const activo = dur1 >= dur2 ? 1 : 2;
+                dialogo = {
+                  actor1: r1[0], actor2: r2[0], dur1, dur2,
+                  consulta1: hVoz1, consulta2: hVoz2, audio1: a1, audio2: a2, f01, f02, activo,
+                };
+                consultaNueva = activo === 1 ? hVoz1 : hVoz2;
+                ultimoAudioActivo = activo === 1 ? a1 : a2;
+                f0Consulta = activo === 1 ? f01 : f02;
+              }
+            }
           }
         }
       }
 
-      // Aislar exclusivamente tramos de voz activa eliminando silencios y música instrumental
-      const soloVoz = normalizarPico(juntarSegmentos(audio, vad.segmentos));
-      const consultaNueva = await huellasDe(soloVoz);
       if (!consultaNueva) {
         // Aislar exclusivamente tramos de voz activa eliminando silencios y música instrumental
-        const soloVoz = normalizarPico(juntarSegmentos(audio, vad.segmentos));
+        const soloVoz = normalizarPico(realzarVozLejana(juntarSegmentos(audio, vad.segmentos), SR));
+        f0Consulta = estimarF0(soloVoz, SR);
         consultaNueva = await huellasDe(soloVoz);
       }
+
+      ultimoDiagnostico = {
+        duracionVoz: dialogo ? (dialogo.activo === 1 ? dialogo.dur1 : dialogo.dur2) : vad.duracionVoz,
+        medVoc: vad.medVoc,
+        snrDb: vad.snrDb,
+        f0: f0Consulta,
+      };
 
       if (acumulandoToma && ultimaConsulta && ultimaConsulta.length) {
         tomasAcumuladas++;
@@ -985,6 +1648,12 @@ async function identificar(blob, huellasListas = null, audioPreprocesado = null)
         consulta = consultaNueva;
       }
     } else {
+      ultimoAudioGrabado = null;
+      ultimoAudioOriginal = null;
+      ultimoAudioActivo = null;
+      ultimoDiagnostico = null;
+      recorteAbierto = false;
+      caraACaraAbierto = false;
       consulta = await huellasListas;
       tomasAcumuladas = 1;
       duracionVozAcumulada = 10.0;
@@ -992,9 +1661,11 @@ async function identificar(blob, huellasListas = null, audioPreprocesado = null)
 
     if (!consulta || !consulta.length) throw new Error('corto');
     ultimaConsulta = consulta;
-    await resolver(consulta, dialogo);
+    await resolver(consulta, dialogo, f0Consulta);
+    vibrar(15);
   } catch (e) {
     console.error(e);
+    acumulandoToma = false;
     estado.textContent = e.message === 'corto' ? 'Toma muy corta: necesito al menos 2 segundos de voz clara.' : 'No he podido leer ese audio.';
   }
   modo(); aro.style.strokeDashoffset = ARO; tc.textContent = codigo(SEGUNDOS);
@@ -1015,14 +1686,22 @@ btn.onclick = async () => {
     return;
   }
 
+  detenerReproducciones();
   let stream;
   try {
     // sin filtros del móvil: la supresión de ruido estropea la voz que sale de la tele
     stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
-  } catch { estado.textContent = 'Necesito permiso para usar el micrófono.'; return; }
+  } catch {
+    acumulandoToma = false;
+    estado.textContent = 'Necesito permiso para usar el micrófono.';
+    return;
+  }
 
-  // vúmetro y brillo del botón con el volumen en directo
+  if (btn.scrollIntoView) btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+  vibrar(18);
+  // vúmetro, onda en vivo y brillo del botón con el volumen en directo
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
   const fuente = ctx.createMediaStreamSource(stream);
 
@@ -1036,8 +1715,11 @@ btn.onclick = async () => {
   const analizador = ctx.createAnalyser(); analizador.fftSize = 1024;
   filtroPasoAlto.connect(analizador);
 
+  const canvasOnda = $('onda');
+  const ctxOnda = canvasOnda && canvasOnda.getContext ? canvasOnda.getContext('2d') : null;
+  const barrasOnda = [];
   const onda = new Float32Array(analizador.fftSize);
-  let vivo = true, pico = 0, muestrasVozVivo = 0;
+  let vivo = true, pico = 0, muestrasVozVivo = 0, aviso2s = false, aviso5s = false;
   (function mide() {
     if (!vivo) return;
     analizador.getFloatTimeDomainData(onda);
@@ -1046,19 +1728,59 @@ btn.onclick = async () => {
     pico = Math.max(nivel, pico - 0.025);
     leds.forEach((l, i) => l.classList.toggle('on', i < Math.round(pico * leds.length)));
     document.documentElement.style.setProperty('--nivel', nivel.toFixed(3));
-    if (nivel > 0.18) muestrasVozVivo += analizador.fftSize;
-    const segVoz = (muestrasVozVivo / ctx.sampleRate).toFixed(1);
-    estado.textContent = acumulandoToma
-      ? `Sumando toma ${String(toma).padStart(2, '0')}. Silencio, se graba · ${segVoz} s de voz nueva`
-      : `Toma ${String(toma).padStart(2, '0')}. Silencio, se graba · ${segVoz} s de voz`;
+    const conVoz = nivel > 0.18;
+    if (conVoz) muestrasVozVivo += analizador.fftSize;
+    const segVozNum = muestrasVozVivo / ctx.sampleRate;
+    const segVoz = segVozNum.toFixed(1);
+    if (segVozNum >= 2.0 && !aviso2s) { aviso2s = true; vibrar(12); }
+    if (segVozNum >= 5.0 && !aviso5s) { aviso5s = true; vibrar([14, 36, 14]); }
+
+    if (ctxOnda) {
+      barrasOnda.push({ nivel, conVoz });
+      if (barrasOnda.length > 48) barrasOnda.shift();
+      const w = canvasOnda.width, h = canvasOnda.height;
+      ctxOnda.clearRect(0, 0, w, h);
+      const paso = w / 48;
+      for (let i = 0; i < barrasOnda.length; i++) {
+        const b = barrasOnda[i];
+        const bh = Math.max(2, b.nivel * (h - 4));
+        ctxOnda.fillStyle = b.conVoz ? '#f2b134' : 'rgba(243,234,216,0.22)';
+        ctxOnda.fillRect(i * paso + 1, (h - bh) / 2, Math.max(2, paso - 2), bh);
+      }
+    }
+
+    const prefToma = acumulandoToma ? `Sumando toma ${String(toma).padStart(2, '0')}` : `Toma ${String(toma).padStart(2, '0')}`;
+    if (segVozNum >= 5.0) {
+      estado.textContent = `${prefToma} · ¡Voz suficiente! (${segVoz} s) · puedes PARAR`;
+    } else if (segVozNum >= 2.0) {
+      estado.textContent = `${prefToma} · ${segVoz} s de voz (puedes PARAR o seguir)`;
+    } else {
+      estado.textContent = `${prefToma} · Escuchando… (${segVoz} s de voz)`;
+    }
     requestAnimationFrame(mide);
   })();
 
-  // audio crudo del micrófono (ya filtrado de retumbes a 85 Hz)
-  const captura = ctx.createScriptProcessor(4096, 1, 1);
-  const bloques = []; let muestras = 0;
-  captura.onaudioprocess = e => { const d = e.inputBuffer.getChannelData(0); bloques.push(new Float32Array(d)); muestras += d.length; };
-  filtroPasoAlto.connect(captura); captura.connect(ctx.destination);
+  // Captura moderna sin cortes mediante AudioWorklet (con respaldo a ScriptProcessorNode)
+  const bloques = []; let muestras = 0, captura, workletUrl = null;
+  if (ctx.audioWorklet && typeof AudioWorkletNode !== 'undefined') {
+    try {
+      const codigoW = 'class EstavozCaptura extends AudioWorkletProcessor{process(ins){const c=ins[0]&&ins[0][0];if(c&&c.length)this.port.postMessage(new Float32Array(c));return true;}}registerProcessor("estavoz-captura",EstavozCaptura);';
+      workletUrl = URL.createObjectURL(new Blob([codigoW], { type: 'application/javascript' }));
+      await ctx.audioWorklet.addModule(workletUrl);
+      captura = new AudioWorkletNode(ctx, 'estavoz-captura');
+      captura.port.onmessage = e => { const d = e.data; bloques.push(d); muestras += d.length; };
+      filtroPasoAlto.connect(captura);
+      captura.connect(ctx.destination);
+    } catch {
+      if (workletUrl) { URL.revokeObjectURL(workletUrl); workletUrl = null; }
+      captura = null;
+    }
+  }
+  if (!captura) {
+    captura = ctx.createScriptProcessor(4096, 1, 1);
+    captura.onaudioprocess = e => { const d = e.inputBuffer.getChannelData(0); bloques.push(new Float32Array(d)); muestras += d.length; };
+    filtroPasoAlto.connect(captura); captura.connect(ctx.destination);
+  }
   const juntar = () => { const a = new Float32Array(muestras); let o = 0; for (const b of bloques) { a.set(b, o); o += b.length; } return a; };
   const tasa = ctx.sampleRate;
 
@@ -1066,7 +1788,7 @@ btn.onclick = async () => {
   modo('grabando');
   btn.disabled = false; // permite pulsar 'PARAR' antes de agotar los 10 segundos
   toma++;
-  estado.textContent = `Toma ${String(toma).padStart(2, '0')}. Silencio, se graba · 0.0 s de voz`;
+  estado.textContent = `Toma ${String(toma).padStart(2, '0')}. Escuchando… (0.0 s de voz)`;
   const t0 = performance.now();
   let grabacionTerminada = false;
 
@@ -1085,6 +1807,7 @@ btn.onclick = async () => {
     vivo = false;
     btn.disabled = true;
     captura.disconnect(); fuente.disconnect();
+    if (workletUrl) URL.revokeObjectURL(workletUrl);
     stream.getTracks().forEach(t => t.stop());
     document.documentElement.style.setProperty('--nivel', 0);
     const a = await remuestrear(juntar(), tasa);
@@ -1102,9 +1825,6 @@ $('fichero').onchange = e => {
   e.target.value = '';
 };
 
-// El parecido del modelo (coseno) no es un porcentaje; esto lo traduce a una probabilidad calibrada.
-// Curva por tramos calibrada sobre 3.373 consultas reales de VoxBlink2 ResNet100 (backend/rechazo.py, ECE = 0.0103).
-const CURVA_PORCENTAJE = [[0.15, 0], [0.22, 19], [0.28, 28], [0.33, 33], [0.37, 47], [0.42, 64], [0.48, 86], [0.54, 95], [0.60, 100]];
 // El parecido del modelo (AS-Norm) no es un porcentaje directo; esto lo traduce a probabilidad calibrada.
 // Curva por tramos calibrada sobre 3.419 consultas independientes de VoxBlink2 ResNet100 + AS-Norm (ECE = 0.0124).
 const CURVA_PORCENTAJE = [[0.25, 0], [0.35, 14], [0.42, 21], [0.47, 30], [0.52, 46], [0.58, 65], [0.66, 86], [0.74, 96], [0.85, 100]];
@@ -1119,11 +1839,12 @@ function aPorcentajeCalibrado(s) {
 }
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-function foto(a, peq = false) {
+function foto(a, peq = false, principal = false) {
   const clase = 'foto' + (peq ? ' peq' : '');
-  if (a.foto) return `<img class="${clase}" src="${esc(a.foto)}" alt="">`;
+  const idAttr = principal ? ' id="fotoPrincipal"' : '';
+  if (a.foto) return `<img${idAttr} class="${clase}" src="${esc(a.foto)}" alt="">`;
   const ini = a.nombre.split(/\s+/).filter(Boolean).map(p => p[0]).slice(0, 2).join('').toUpperCase();
-  return `<div class="${clase} ini">${esc(ini)}</div>`;
+  return `<div${idAttr} class="${clase} ini">${esc(ini)}</div>`;
 }
 
 // "Jon Nieve en JUEGO DE TRONOS (2019)" -> personaje, obra, año
@@ -1132,7 +1853,7 @@ function papel(t) {
   return m ? { personaje: m[1], obra: m[2], anio: m[3] } : { personaje: t, obra: '', anio: '' };
 }
 
-let ultimo, ultimaConsulta, ultimaPista, acumulandoToma = false, tomasAcumuladas = 1, duracionVozAcumulada = 0;
+let ultimo, ultimaConsulta, ultimaPista, ultimoEstadoResultado = null, acumulandoToma = false, tomasAcumuladas = 1, duracionVozAcumulada = 0;
 const CONFIG = window.ESTAVOZ_CONFIG || {};
 
 function sumarToma() {
@@ -1142,7 +1863,7 @@ function sumarToma() {
 
 // "¿Acertamos?": se guarda solo la huella de voz (unos números), nunca el audio.
 function pregunta(otros) {
-  if (!CONFIG.supabaseUrl) return '';
+  if (!CONFIG.supabaseUrl || !CONFIG.supabaseKey) return '';
   return `<div class="pregunta" id="pregunta">
     <div class="rotulo"><span>¿ACERTAMOS?</span></div>
     <div class="fila"><button onclick="responder(true)">Sí, es esa voz</button><button onclick="mostrarOtros()">No</button></div>
@@ -1170,22 +1891,115 @@ function responderNombre() {
 
 async function responder(acierto, real = null) {
   $('pregunta').innerHTML = '<div class="gracias">¡Gracias! Así Estavoz aprende.</div>';
+  if (!CONFIG.supabaseUrl || !CONFIG.supabaseKey || !ultimo || !ultimo.id || !Array.isArray(ultimaConsulta) || !ultimaConsulta.length) return;
   const huellas = ultimaConsulta.slice(0, 4).map(h => Array.from(h, v => Math.round(v * 1e4) / 1e4));
+  const esAcierto = Boolean(acierto);
+  const realLimpio = (!esAcierto && typeof real === 'string' && real.trim()) ? real.trim().slice(0, 100) : null;
+  const basePayload = {
+    propuesto: String(ultimo.id).slice(0, 100),
+    acierto: esAcierto,
+    real: realLimpio,
+    huellas,
+    version: '3',  // 3 = VoxBlink2 ResNet100 (exportar_web.VERSION_MODELO)
+  };
+  const parecidoRed = (typeof ultimo.parecido === 'number' && Number.isFinite(ultimo.parecido) && ultimo.parecido >= -1 && ultimo.parecido <= 2)
+    ? Math.round(ultimo.parecido * 1e4) / 1e4 : null;
+  const f0Red = (typeof ultimaF0 === 'number' && Number.isFinite(ultimaF0) && ultimaF0 >= 50 && ultimaF0 <= 400)
+    ? Math.round(ultimaF0 * 10) / 10 : null;
+  const payload = {
+    ...basePayload,
+    estado: (ultimoEstadoResultado === 'identificado' || ultimoEstadoResultado === 'dudoso' || ultimoEstadoResultado === 'desconocido')
+      ? ultimoEstadoResultado : null,
+    parecido: parecidoRed,
+    f0: f0Red,
+    tomas: Math.max(1, Math.min(10, Math.round(tomasAcumuladas || 1))),
+    con_pista: Boolean(ultimaPista),
+  };
+  const enviar = body => fetch(`${CONFIG.supabaseUrl}/rest/v1/respuestas`, {
+    method: 'POST',
+    headers: { apikey: CONFIG.supabaseKey, Authorization: `Bearer ${CONFIG.supabaseKey}`,
+               'Content-Type': 'application/json', Prefer: 'return=minimal' },
+    body: JSON.stringify(body),
+  });
   try {
-    await fetch(`${CONFIG.supabaseUrl}/rest/v1/respuestas`, {
-      method: 'POST',
-      headers: { apikey: CONFIG.supabaseKey, Authorization: `Bearer ${CONFIG.supabaseKey}`,
-                 'Content-Type': 'application/json', Prefer: 'return=minimal' },
-      body: JSON.stringify({ propuesto: ultimo.id, acierto, real, huellas, version: '3' }),  // 3 = VoxBlink2 ResNet100 (exportar_web.VERSION_MODELO)
-    });
+    const r = await enviar(payload);
+    // Respaldo transparente por si la migración SQL de columnas nuevas aún no se ejecutó en Supabase
+    if (r && !r.ok && r.status === 400) {
+      await enviar(basePayload);
+    }
   } catch (e) { console.error(e); }
 }
 
-let audioMuestra = null, btnMuestraActivo = null;
+let audioMuestra = null, btnMuestraActivo = null, btnMuestraModoCompacto = false;
+let tomaCtx = null, tomaSrc = null, btnTomaActivo = null;
 
-function reproducirMuestra(idNum, btnEl) {
-  const url = `https://www.eldoblaje.com/datos/Muestras/${idNum}.mp3`;
-  if (audioMuestra && !audioMuestra.paused && audioMuestra.dataset.id === idNum) {
+function detenerReproducciones() {
+  if (audioMuestra) {
+    audioMuestra.pause();
+    audioMuestra = null;
+  }
+  if (btnMuestraActivo) {
+    actualizarBotonMuestra(btnMuestraActivo, false, btnMuestraModoCompacto);
+    btnMuestraActivo = null;
+  }
+  const fPrin = $('fotoPrincipal');
+  if (fPrin) fPrin.classList.remove('color');
+  if (tomaSrc) {
+    try { tomaSrc.stop(); } catch {}
+    tomaSrc = null;
+  }
+  if (tomaCtx) {
+    try { tomaCtx.close(); } catch {}
+    tomaCtx = null;
+  }
+  if (btnTomaActivo) {
+    actualizarBotonToma(btnTomaActivo, false);
+    btnTomaActivo = null;
+  }
+}
+
+function actualizarBotonToma(btnEl, sonando) {
+  if (!btnEl) return;
+  if (sonando) {
+    btnEl.innerHTML = `<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg><span>Parar mi audio</span>`;
+    btnEl.style.borderColor = 'var(--verde)';
+    btnEl.style.color = 'var(--verde)';
+  } else {
+    btnEl.innerHTML = `<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg><span>Oír mi grabación</span>`;
+    btnEl.style.borderColor = '';
+    btnEl.style.color = '';
+  }
+}
+
+function reproducirTomaUsuario(btnEl) {
+  if (!ultimoAudioActivo || !ultimoAudioActivo.length) return;
+  if (tomaSrc && btnTomaActivo === btnEl) {
+    detenerReproducciones();
+    return;
+  }
+  detenerReproducciones();
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    tomaCtx = new AudioCtx();
+    const buf = tomaCtx.createBuffer(1, ultimoAudioActivo.length, SR);
+    buf.copyToChannel(ultimoAudioActivo, 0);
+    tomaSrc = tomaCtx.createBufferSource();
+    tomaSrc.buffer = buf;
+    tomaSrc.connect(tomaCtx.destination);
+    btnTomaActivo = btnEl;
+    actualizarBotonToma(btnEl, true);
+    tomaSrc.onended = () => {
+      if (btnTomaActivo === btnEl) actualizarBotonToma(btnEl, false);
+      btnTomaActivo = null;
+      tomaSrc = null;
+    };
+    tomaSrc.start();
+  } catch (e) {
+    console.error(e);
+    detenerReproducciones();
+  }
+}
+
 function urlsMuestraActor(idNum, rutaMuestra = '') {
   const urls = [];
   if (rutaMuestra) {
@@ -1200,27 +2014,25 @@ function urlsMuestraActor(idNum, rutaMuestra = '') {
   return urls;
 }
 
-function reproducirMuestra(idNum, btnEl, rutaMuestra = '') {
+function reproducirMuestra(idNum, btnEl, rutaMuestra = '', modoCompacto = false) {
   const urls = urlsMuestraActor(idNum, rutaMuestra);
   if (!urls.length) return;
-  if (audioMuestra && !audioMuestra.paused && audioMuestra.dataset.id === String(idNum)) {
-    audioMuestra.pause();
-    actualizarBotonMuestra(btnEl, false);
+  if (audioMuestra && !audioMuestra.paused && btnMuestraActivo === btnEl) {
+    detenerReproducciones();
     return;
   }
-  if (audioMuestra) {
-    audioMuestra.pause();
-    if (btnMuestraActivo) actualizarBotonMuestra(btnMuestraActivo, false);
-  }
-  audioMuestra = new Audio(url);
-  audioMuestra.dataset.id = idNum;
+  detenerReproducciones();
   let idxUrl = 0;
   audioMuestra = new Audio(urls[0]);
   audioMuestra.dataset.id = String(idNum);
   btnMuestraActivo = btnEl;
-  actualizarBotonMuestra(btnEl, true);
+  btnMuestraModoCompacto = modoCompacto;
+  actualizarBotonMuestra(btnEl, true, modoCompacto);
+  const fPrin = $('fotoPrincipal');
+  if (fPrin && !modoCompacto) fPrin.classList.add('color');
   audioMuestra.onended = () => {
-    actualizarBotonMuestra(btnEl, false);
+    actualizarBotonMuestra(btnEl, false, modoCompacto);
+    if (fPrin) fPrin.classList.remove('color');
     btnMuestraActivo = null;
   };
   audioMuestra.onerror = () => {
@@ -1228,30 +2040,33 @@ function reproducirMuestra(idNum, btnEl, rutaMuestra = '') {
     if (idxUrl < urls.length) {
       audioMuestra.src = urls[idxUrl];
       audioMuestra.play().catch(() => {
-        actualizarBotonMuestra(btnEl, false);
+        actualizarBotonMuestra(btnEl, false, modoCompacto);
+        if (fPrin) fPrin.classList.remove('color');
         btnMuestraActivo = null;
       });
       return;
     }
-    actualizarBotonMuestra(btnEl, false);
-    btnEl.innerHTML = '<span>Muestra no disponible</span>';
+    actualizarBotonMuestra(btnEl, false, modoCompacto);
+    if (fPrin) fPrin.classList.remove('color');
+    btnEl.innerHTML = modoCompacto ? '<span>Sin audio</span>' : '<span>Muestra no disponible</span>';
     btnEl.disabled = true;
     btnMuestraActivo = null;
   };
   audioMuestra.play().catch(() => {
-    actualizarBotonMuestra(btnEl, false);
+    actualizarBotonMuestra(btnEl, false, modoCompacto);
+    if (fPrin) fPrin.classList.remove('color');
     btnMuestraActivo = null;
   });
 }
 
-function actualizarBotonMuestra(btnEl, sonando) {
+function actualizarBotonMuestra(btnEl, sonando, modoCompacto = false) {
   if (!btnEl) return;
   if (sonando) {
-    btnEl.innerHTML = `<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg><span>Detener muestra</span>`;
+    btnEl.innerHTML = `<svg viewBox="0 0 24 24" width="${modoCompacto ? 12 : 15}" height="${modoCompacto ? 12 : 15}" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg><span>${modoCompacto ? 'Parar' : 'Detener muestra'}</span>`;
     btnEl.style.borderColor = 'var(--ambar)';
     btnEl.style.color = 'var(--ambar)';
   } else {
-    btnEl.innerHTML = `<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg><span>Escuchar muestra oficial</span>`;
+    btnEl.innerHTML = `<svg viewBox="0 0 24 24" width="${modoCompacto ? 12 : 15}" height="${modoCompacto ? 12 : 15}" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg><span>${modoCompacto ? 'Muestra' : 'Escuchar muestra oficial'}</span>`;
     btnEl.style.borderColor = '';
     btnEl.style.color = '';
   }
@@ -1340,14 +2155,17 @@ function volverResultadoPrincipal() {
 
 async function alternarFilmografia(forzarAbrir = false) {
   const panel = $('filmografia-panel');
+  const btnExp = $('btn-explorar');
   if (!panel || !estadoFilmo.actor) return;
   if (!forzarAbrir && estadoFilmo.abierto) {
     estadoFilmo.abierto = false;
     panel.style.display = 'none';
+    if (btnExp && btnExp.setAttribute) btnExp.setAttribute('aria-expanded', 'false');
     return;
   }
   estadoFilmo.abierto = true;
   panel.style.display = 'block';
+  if (btnExp && btnExp.setAttribute) btnExp.setAttribute('aria-expanded', 'true');
   if (!estadoFilmo.filas.length) {
     $('filmo-lista').innerHTML = '<li class="dato">Cargando filmografía completa…</li>';
     estadoFilmo.filas = await cargarPapelesActor(estadoFilmo.actor);
@@ -1440,46 +2258,448 @@ function renderFilmografia() {
   }
 }
 
+const HISTORIAL_KEY = 'estavoz-historial-v1';
+
+function leerHistorial() {
+  try {
+    const raw = window.localStorage ? localStorage.getItem(HISTORIAL_KEY) : null;
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch { return []; }
+}
+
+function actualizarBotonHistorial() {
+  const b = $('btnHistorial');
+  if (!b) return;
+  const h = leerHistorial();
+  b.hidden = h.length === 0;
+  b.textContent = `Historial (${h.length})`;
+}
+
+function guardarEnHistorial(top, estadoId, pct, pistaTxt) {
+  if (!top || estadoId === 'desconocido') return;
+  try {
+    if (!window.localStorage) return;
+    const items = leerHistorial();
+    const entrada = {
+      id: top.id,
+      nombre: top.nombre,
+      pct,
+      estado: estadoId,
+      pista: pistaTxt || '',
+      papel: top.papelPista ? `${top.papelPista.personaje || ''} · ${top.papelPista.obra || ''}`.replace(/^ · | · $/g, '') : '',
+      ts: Date.now(),
+    };
+    const filtrados = items.filter(x => !(x.id === entrada.id && x.pista === entrada.pista && (entrada.ts - x.ts) < 120000));
+    localStorage.setItem(HISTORIAL_KEY, JSON.stringify([entrada, ...filtrados].slice(0, 25)));
+    actualizarBotonHistorial();
+  } catch {}
+}
+
+function renderPanelHistorial() {
+  const panel = $('panelHistorial');
+  if (!panel) return;
+  const items = leerHistorial();
+  if (!items.length) {
+    panel.hidden = true;
+    const b = $('btnHistorial');
+    if (b) b.classList.remove('activo');
+    return;
+  }
+  panel.innerHTML = `
+    <div class="rotulo">
+      <span>ÚLTIMAS VOCES IDENTIFICADAS</span>
+      <button type="button" class="hist-limpiar" onclick="limpiarHistorial()">Borrar todo</button>
+    </div>
+    <ul class="hist-lista">
+      ${items.map((it, pos) => {
+        const hora = new Date(it.ts).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+        const det = [it.papel || it.pista, `${it.pct}%`, hora].filter(Boolean).join(' · ');
+        return `<li><button type="button" class="hist-item" onclick="abrirDesdeHistorial(${pos})">
+          <div><strong>${esc(it.nombre)}</strong><span>${esc(det)}</span></div>
+          <span>↗</span>
+        </button></li>`;
+      }).join('')}
+    </ul>`;
+}
+
+function alternarHistorial() {
+  const panel = $('panelHistorial'), b = $('btnHistorial');
+  if (!panel) return;
+  panel.hidden = !panel.hidden;
+  if (b) {
+    b.classList.toggle('activo', !panel.hidden);
+    if (b.setAttribute) b.setAttribute('aria-expanded', String(!panel.hidden));
+  }
+  if (!panel.hidden) renderPanelHistorial();
+}
+
+function limpiarHistorial() {
+  try { if (window.localStorage) localStorage.removeItem(HISTORIAL_KEY); } catch {}
+  actualizarBotonHistorial();
+  renderPanelHistorial();
+}
+
+function abrirDesdeHistorial(pos) {
+  const it = leerHistorial()[pos];
+  if (!it || !actores) return;
+  const idx = actores.findIndex(a => a.id === it.id);
+  if (idx < 0) return;
+  alternarHistorial();
+  const fake = [{ ...actores[idx], _idx: idx, parecido: 0 }];
+  fake.estado = it.estado || 'identificado';
+  fake.desdeHistorial = true;
+  fake.pctFijo = it.pct;
+  ultimaLista = fake;
+  pintar(fake);
+}
+
+function botonMuestraCompactoHtml(actor) {
+  const idNum = String(actor.id).split('-')[0];
+  const tieneMuestra = /^\d+$/.test(idNum) || actor.muestra;
+  if (!tieneMuestra) return '';
+  const ruta = esc(actor.muestra || '');
+  return `<button type="button" class="btn-muestra mini" title="Escuchar muestra oficial de ${esc(actor.nombre)}" onclick="event.stopPropagation(); reproducirMuestra('${esc(idNum)}', this, '${ruta}', true)"><svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg><span>Muestra</span></button>`;
+}
+
+function obtenerAudioRecortado() {
+  if (!ultimoAudioOriginal || !ultimoAudioOriginal.length) return ultimoAudioActivo;
+  const durTotal = ultimoAudioOriginal.length / SR;
+  const ini = Math.max(0, Math.min(durTotal - 2.0, recorteIniSeg));
+  const fin = Math.max(ini + 2.0, Math.min(durTotal, recorteFinSeg || durTotal));
+  return ultimoAudioOriginal.slice(Math.round(ini * SR), Math.round(fin * SR));
+}
+
+function dibujarCanvasRecorte() {
+  const cv = $('canvasRecorte');
+  if (!cv || !cv.getContext || !ultimoAudioOriginal || !ultimoAudioOriginal.length) return;
+  const ctx = cv.getContext('2d');
+  if (!ctx) return;
+  const w = cv.width, h = cv.height;
+  ctx.clearRect(0, 0, w, h);
+  const nBarras = 64;
+  const tamBloque = Math.max(1, Math.floor(ultimoAudioOriginal.length / nBarras));
+  const durTotal = ultimoAudioOriginal.length / SR;
+  const xIni = (recorteIniSeg / Math.max(durTotal, 0.1)) * w;
+  const xFin = (recorteFinSeg / Math.max(durTotal, 0.1)) * w;
+  const pasoX = w / nBarras;
+
+  const picos = new Float32Array(nBarras);
+  let maxP = 1e-4;
+  for (let b = 0; b < nBarras; b++) {
+    const o = b * tamBloque;
+    let sumSq = 0;
+    for (let j = 0; j < tamBloque && o + j < ultimoAudioOriginal.length; j++) {
+      const v = ultimoAudioOriginal[o + j];
+      sumSq += v * v;
+    }
+    picos[b] = Math.sqrt(sumSq / tamBloque);
+    if (picos[b] > maxP) maxP = picos[b];
+  }
+
+  for (let b = 0; b < nBarras; b++) {
+    const tSeg = ((b + 0.5) / nBarras) * durTotal;
+    const dentro = tSeg >= recorteIniSeg && tSeg <= recorteFinSeg;
+    const norm = Math.min(1, picos[b] / maxP);
+    const bh = Math.max(3, norm * (h - 8));
+    ctx.fillStyle = dentro ? (norm > 0.18 ? '#f2b134' : '#f3ead8') : 'rgba(243,234,216,0.16)';
+    ctx.fillRect(b * pasoX + 1, (h - bh) / 2, Math.max(2, pasoX - 2), bh);
+  }
+
+  ctx.fillStyle = '#e5322d';
+  ctx.fillRect(Math.max(0, xIni - 1), 0, 3, h);
+  ctx.fillRect(Math.min(w - 3, xFin - 2), 0, 3, h);
+}
+
+function vincularArrastreCanvasRecorte() {
+  const cv = $('canvasRecorte');
+  if (!cv || !cv.addEventListener || !ultimoAudioOriginal) return;
+  let arrastrando = null;
+  const actualizarDesdeX = clientX => {
+    const rect = cv.getBoundingClientRect ? cv.getBoundingClientRect() : { left: 0, width: 380 };
+    const rel = Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(rect.width, 1)));
+    const durTotal = Math.round((ultimoAudioOriginal.length / SR) * 10) / 10;
+    const t = Math.round(rel * durTotal * 5) / 5;
+    if (!arrastrando) {
+      arrastrando = Math.abs(t - recorteIniSeg) <= Math.abs(t - recorteFinSeg) ? 'ini' : 'fin';
+    }
+    onCambioRecorte(arrastrando, t);
+  };
+  cv.addEventListener('pointerdown', ev => { arrastrando = null; actualizarDesdeX(ev.clientX); });
+  cv.addEventListener('pointermove', ev => { if (ev.buttons === 1 && arrastrando) actualizarDesdeX(ev.clientX); });
+  cv.addEventListener('pointerup', () => { arrastrando = null; });
+}
+
+function alternarPanelRecorte() {
+  if (!ultimoAudioOriginal || ultimoAudioOriginal.length < 2 * SR) return;
+  recorteAbierto = !recorteAbierto;
+  const p = $('panelRecorte');
+  if (p) {
+    p.hidden = !recorteAbierto;
+    if (recorteAbierto) {
+      dibujarCanvasRecorte();
+      vincularArrastreCanvasRecorte();
+    }
+  }
+}
+
+function onCambioRecorte(tipo, valor) {
+  if (!ultimoAudioOriginal) return;
+  const durTotal = Math.round((ultimoAudioOriginal.length / SR) * 10) / 10;
+  const v = Number(valor);
+  if (tipo === 'ini') {
+    recorteIniSeg = Math.max(0, Math.min(v, recorteFinSeg - 2.0));
+  } else {
+    recorteFinSeg = Math.min(durTotal, Math.max(v, recorteIniSeg + 2.0));
+  }
+  const rIni = $('rangoIni'), rFin = $('rangoFin'), lbl = $('rotuloRecorte');
+  if (rIni) rIni.value = recorteIniSeg.toFixed(1);
+  if (rFin) rFin.value = recorteFinSeg.toFixed(1);
+  if (lbl) lbl.textContent = `TRAMO SELECCIONADO: ${recorteIniSeg.toFixed(1)} s – ${recorteFinSeg.toFixed(1)} s (${(recorteFinSeg - recorteIniSeg).toFixed(1)} s)`;
+  dibujarCanvasRecorte();
+}
+
+function restaurarTramoCompleto() {
+  if (!ultimoAudioOriginal) return;
+  recorteIniSeg = 0;
+  recorteFinSeg = Math.round((ultimoAudioOriginal.length / SR) * 10) / 10;
+  onCambioRecorte('fin', recorteFinSeg);
+  onCambioRecorte('ini', 0);
+}
+
+function reproducirTramoRecortado(btnEl) {
+  ultimoAudioActivo = obtenerAudioRecortado();
+  reproducirTomaUsuario(btnEl);
+}
+
+function reanalizarTramoRecortado() {
+  const tramo = obtenerAudioRecortado();
+  if (!tramo || tramo.length < 2 * SR) return;
+  identificar(null, null, tramo, true);
+}
+
+function alternarCaraACara(idxRival = null) {
+  if (!ultimaLista || ultimaLista.length < 2) return;
+  if (idxRival !== null && idxRival !== undefined) {
+    idxRivalCaraACara = idxRival;
+    caraACaraAbierto = true;
+  } else {
+    caraACaraAbierto = !caraACaraAbierto;
+  }
+  pintar(ultimaLista);
+}
+
+function renderCaraACaraHtml(top, otros) {
+  if (!caraACaraAbierto || !otros || !otros.length) return '';
+  const rival = otros.find(x => x._idx === idxRivalCaraACara) || otros[0];
+  const colHtml = (c, etiq) => {
+    const pctC = aPorcentajeCalibrado(c.parecido);
+    const regC = c.f0 ? (c.f0 < 125 ? ' · Grave' : (c.f0 > 185 ? ' · Agudo' : ' · Medio')) : '';
+    const roles = (c.trabajos || []).slice(0, 3).map(papel);
+    const vozh = (c.vozh || []).slice(0, 2).map(v => v.nombre).join(', ');
+    return `<div class="col-cara">
+      <div class="rotulo"><span>${etiq}</span><b>${pctC}%</b></div>
+      <div class="cab-cara">
+        ${foto(c, true)}
+        <div>
+          <div class="nom-cara">${esc(c.nombre)}</div>
+          <div class="dato" style="margin-top:2px">${(c.num_trabajos || 0).toLocaleString('es-ES')} doblajes${regC}</div>
+        </div>
+      </div>
+      <div>${botonMuestraCompactoHtml(c)}</div>
+      ${vozh ? `<div class="dato" style="margin-top:0">Voz de: ${esc(vozh)}</div>` : ''}
+      ${roles.length ? `<ul class="roles-cara">${roles.map(r => `<li><em>${esc(r.personaje)}</em><span>${esc(limpiarEtiquetaObraJs(r.obra))}</span></li>`).join('')}</ul>` : ''}
+      <button type="button" class="btn-muestra mini" style="margin-top:auto; justify-content:center" onclick="verCandidato(${c._idx})">Ver ficha completa</button>
+    </div>`;
+  };
+  return `<div class="panel-cara-a-cara" id="panelCaraACara">
+    <div class="rotulo">
+      <span>CARA A CARA · #1 VS #2</span>
+      <button type="button" class="hist-limpiar" onclick="alternarCaraACara()">Cerrar ✕</button>
+    </div>
+    <div class="grid-cara">
+      ${colHtml(top, 'CANDIDATO #1')}
+      ${colHtml(rival, 'CANDIDATO #2')}
+    </div>
+  </div>`;
+}
+
+function generarTarjetaCanvas(actor = ultimo, pct = null) {
+  if (!actor || typeof document === 'undefined' || !document.createElement) return null;
+  const cv = document.createElement('canvas');
+  cv.width = 800;
+  cv.height = 1000;
+  const pctVal = typeof pct === 'number' ? pct : aPorcentajeCalibrado(actor.parecido || 0);
+  const roles = (actor.trabajos || []).slice(0, 4).map(papel);
+  cv.resumenDatos = { nombre: actor.nombre, id: actor.id, pct: pctVal, numRoles: roles.length };
+  const ctx = cv.getContext ? cv.getContext('2d') : null;
+  if (!ctx) return cv;
+
+  ctx.fillStyle = '#14110f';
+  ctx.fillRect(0, 0, 800, 1000);
+  ctx.fillStyle = '#1d1915';
+  ctx.fillRect(40, 40, 720, 920);
+  ctx.fillStyle = pctVal >= 50 ? '#5ec27e' : '#f2b134';
+  ctx.fillRect(40, 40, 720, 8);
+
+  ctx.fillStyle = '#f3ead8';
+  ctx.font = 'italic 600 34px Georgia, serif';
+  ctx.fillText('estavoz.', 80, 105);
+  ctx.fillStyle = '#bfb29c';
+  ctx.font = '600 16px monospace';
+  ctx.fillText('ESTA VOZ ES DE', 80, 165);
+
+  ctx.fillStyle = '#f3ead8';
+  ctx.font = '600 54px Georgia, serif';
+  ctx.fillText(String(actor.nombre || '').slice(0, 26), 80, 230);
+
+  ctx.fillStyle = '#bfb29c';
+  ctx.font = '18px monospace';
+  const sub = `${(actor.num_trabajos || 0).toLocaleString('es-ES')} DOBLAJES EN ESPAÑOL`;
+  ctx.fillText(sub, 80, 270);
+
+  ctx.fillStyle = '#f3ead8';
+  ctx.font = '600 18px monospace';
+  ctx.fillText(`COINCIDENCIA · ${pctVal}%`, 80, 330);
+  const enc = Math.round(pctVal / 5);
+  for (let i = 0; i < 20; i++) {
+    ctx.fillStyle = i < enc ? '#f2b134' : 'rgba(243,234,216,0.14)';
+    ctx.fillRect(80 + i * 32, 348, 26, 18);
+  }
+
+  let y = 430;
+  if (roles.length) {
+    ctx.fillStyle = '#bfb29c';
+    ctx.font = '600 16px monospace';
+    ctx.fillText('LE HAS OÍDO COMO', 80, y);
+    y += 42;
+    for (const r of roles) {
+      ctx.fillStyle = '#f3ead8';
+      ctx.font = 'italic 30px Georgia, serif';
+      ctx.fillText(String(r.personaje || '').slice(0, 34), 80, y);
+      y += 28;
+      ctx.fillStyle = '#bfb29c';
+      ctx.font = '16px monospace';
+      ctx.fillText(String(limpiarEtiquetaObraJs(r.obra) || '').toUpperCase().slice(0, 46), 80, y);
+      y += 48;
+    }
+  }
+
+  ctx.fillStyle = '#bfb29c';
+  ctx.font = '16px monospace';
+  ctx.fillText('estavoz · ¿Quién pone esa voz?', 80, 915);
+  return cv;
+}
+
+function descargarTarjetaImagen() {
+  if (!ultimo) return;
+  const cv = generarTarjetaCanvas(ultimo);
+  if (!cv || typeof cv.toDataURL !== 'function') return;
+  try {
+    const a = document.createElement('a');
+    a.href = cv.toDataURL('image/png');
+    a.download = `estavoz-${ultimo.id || 'voz'}.png`;
+    a.click();
+    estado.textContent = 'Tarjeta guardada en imagen.';
+  } catch {}
+}
+
 function pintar(lista) {
+  if (!lista || !lista.length) {
+    estado.textContent = 'No hay candidatos para esta pista.';
+    return;
+  }
   const [top, ...otros] = lista;
   const estadoId = lista.estado || (aPorcentajeCalibrado(top.parecido) >= 50 ? 'identificado' : 'dudoso');
-  const pct = aPorcentajeCalibrado(top.parecido);
+  const pct = typeof lista.pctFijo === 'number' ? lista.pctFijo : aPorcentajeCalibrado(top.parecido);
   ultimo = top;
+  ultimoEstadoResultado = estadoId;
   estadoFilmo = { abierto: false, tipo: 'todo', q: '', limite: 40, filas: [], actor: top };
 
-  estado.textContent = estadoId === 'identificado'
-    ? '¡Corten! La tenemos.'
-    : (estadoId === 'dudoso' ? 'Toma dudosa… ¿será alguno de estos?' : 'No logro identificar esta voz con seguridad.');
-  const rotuloFicha = estadoId === 'identificado'
-    ? 'ESTA VOZ ES DE'
-    : (estadoId === 'dudoso' ? 'TOMA DUDOSA · ¿QUIZÁ ES DE…?' : 'VOZ NO IDENTIFICADA · MÁS CERCANA A');
-  const rotuloFicha = lista.esInspeccion
-    ? 'CANDIDATO ALTERNATIVO · <a href="#" onclick="volverResultadoPrincipal(); return false" style="color:var(--ambar); text-decoration:underline">← VOLVER AL PRINCIPAL</a>'
+  if (!lista.esInspeccion && !lista.desdeHistorial && !lista.esCatalogo) {
+    guardarEnHistorial(top, estadoId, pct, ultimaPista ? ultimaPista.texto : '');
+  }
+
+  estado.textContent = lista.esCatalogo
+    ? `Ficha de ${top.nombre}.`
     : (estadoId === 'identificado'
-      ? 'ESTA VOZ ES DE'
-      : (estadoId === 'dudoso' ? 'TOMA DUDOSA · ¿QUIZÁ ES DE…?' : 'VOZ NO IDENTIFICADA · MÁS CERCANA A'));
+      ? '¡Corten! La tenemos.'
+      : (estadoId === 'dudoso' ? 'Toma dudosa… compara las muestras para asegurarte.' : 'No logro identificar esta voz con seguridad.'));
+
+  const badgeEstado = lista.esCatalogo
+    ? '<span class="badge-estado ok">CATÁLOGO</span>'
+    : (lista.esInspeccion
+      ? '<span class="badge-estado duda">CANDIDATO</span>'
+      : (estadoId === 'identificado'
+        ? '<span class="badge-estado ok">IDENTIFICADO</span>'
+        : (estadoId === 'dudoso' ? '<span class="badge-estado duda">DUDOSO</span>' : '<span class="badge-estado desc">NO IDENTIFICADA</span>')));
+
+  const rotuloFicha = lista.esInspeccion
+    ? '<a href="#" onclick="volverResultadoPrincipal(); return false" style="color:var(--ambar); text-decoration:underline">← VOLVER AL PRINCIPAL</a>'
+    : (lista.esCatalogo
+      ? (lista.tieneResultadoPrevio
+        ? '<a href="#" onclick="volverResultadoPrincipal(); return false" style="color:var(--ambar); text-decoration:underline">← VOLVER AL RESULTADO</a>'
+        : 'FICHA DEL CATÁLOGO')
+      : (lista.desdeHistorial
+        ? 'DESDE HISTORIAL'
+        : (estadoId === 'identificado'
+          ? 'ESTA VOZ ES DE'
+          : (estadoId === 'dudoso' ? 'TOMA DUDOSA · ¿QUIZÁ ES DE…?' : 'VOZ FUERA DE CATÁLOGO O CON RUIDO'))));
+
   const encendidos = Math.round(pct / 5);
-  let papeles = (top.trabajos || []).slice(0, 4).map(papel);
-  if (top.papelPista) papeles = [{ ...top.papelPista, destacado: true }, ...papeles.filter(p => p.obra !== top.papelPista.obra)].slice(0, 4);
-  res.dataset.otros = JSON.stringify(otros.map(o => ({ id: o.id, nombre: o.nombre })));
   let papeles = (top.trabajos || []).slice(0, 6).map(papel);
   if (top.papelPista) papeles = [{ ...top.papelPista, destacado: true }, ...papeles.filter(p => p.obra !== top.papelPista.obra)].slice(0, 6);
   res.dataset.otros = JSON.stringify(otros.slice(0, 3).map(o => ({ id: o.id, nombre: o.nombre })));
 
   const idNumTop = String(top.id).split('-')[0];
   const urlFichaTop = `https://www.eldoblaje.com/datos/FichaActorDoblaje.asp?id=${idNumTop}`;
-  const verificacionHtml = /^\d+$/.test(idNumTop) ? `
   const rutaMuestraEsc = esc(top.muestra || '');
-  const verificacionHtml = (/^\d+$/.test(idNumTop) || top.muestra) ? `
-    <div class="verificacion-actor">
-      <button type="button" class="btn-muestra" onclick="reproducirMuestra('${idNumTop}', this)">
-      <button type="button" class="btn-muestra" onclick="reproducirMuestra('${esc(idNumTop)}', this, '${rutaMuestraEsc}')">
+  const tieneAudioUsuario = Boolean(ultimoAudioActivo && ultimoAudioActivo.length);
+  const tieneRecorte = Boolean(ultimoAudioOriginal && ultimoAudioOriginal.length >= 2.5 * SR && !lista.esCatalogo && !lista.desdeHistorial);
+  const durOrigSeg = tieneRecorte ? Math.round((ultimoAudioOriginal.length / SR) * 10) / 10 : 0;
+  if (tieneRecorte && (!recorteFinSeg || recorteFinSeg > durOrigSeg)) {
+    recorteIniSeg = 0;
+    recorteFinSeg = durOrigSeg;
+  }
+  const btnMiTomaHtml = tieneAudioUsuario ? `
+      <button type="button" class="btn-muestra" onclick="reproducirTomaUsuario(this)">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg>
-        <span>Escuchar muestra oficial</span>
-      </button>
-      <a class="enlace-ficha" href="${urlFichaTop}" target="_blank" rel="noopener noreferrer">Ficha en eldoblaje.com ↗</a>
-      ${/^\d+$/.test(idNumTop) ? `<a class="enlace-ficha" href="${urlFichaTop}" target="_blank" rel="noopener noreferrer">Ficha en eldoblaje.com ↗</a>` : ''}
+        <span>Oír mi grabación</span>
+      </button>` : '';
+  const btnRecorteHtml = tieneRecorte ? `
+      <button type="button" class="btn-muestra" onclick="alternarPanelRecorte()" title="Seleccionar el tramo más limpio de la grabación">
+        <span>✂ Recortar tramo</span>
+      </button>` : '';
+  const panelRecorteHtml = tieneRecorte ? `
+    <div id="panelRecorte" class="panel-recorte" ${recorteAbierto ? '' : 'hidden'}>
+      <div class="rotulo">
+        <span id="rotuloRecorte">TRAMO SELECCIONADO: ${recorteIniSeg.toFixed(1)} s – ${recorteFinSeg.toFixed(1)} s (${(recorteFinSeg - recorteIniSeg).toFixed(1)} s)</span>
+        <button type="button" class="hist-limpiar" onclick="restaurarTramoCompleto()">Todo (${durOrigSeg.toFixed(1)} s)</button>
+      </div>
+      <canvas id="canvasRecorte" class="canvas-recorte" width="380" height="54"></canvas>
+      <div class="rangos-recorte">
+        <label>Inicio <input type="range" id="rangoIni" min="0" max="${durOrigSeg.toFixed(1)}" step="0.2" value="${recorteIniSeg.toFixed(1)}" oninput="onCambioRecorte('ini', this.value)"></label>
+        <label>Fin <input type="range" id="rangoFin" min="0" max="${durOrigSeg.toFixed(1)}" step="0.2" value="${recorteFinSeg.toFixed(1)}" oninput="onCambioRecorte('fin', this.value)"></label>
+      </div>
+      <div class="recorte-btns">
+        <button type="button" class="btn-muestra mini" onclick="reproducirTramoRecortado(this)">Oír tramo</button>
+        <button type="button" class="btn-muestra mini" style="border-color:var(--ambar); color:var(--ambar)" onclick="reanalizarTramoRecortado()">Re-analizar tramo limpio</button>
+      </div>
     </div>` : '';
+
+  const verificacionHtml = (/^\d+$/.test(idNumTop) || top.muestra || tieneAudioUsuario) ? `
+    <div class="verificacion-actor">
+      <div class="verificacion-btns">
+        ${(/^\d+$/.test(idNumTop) || top.muestra) ? `<button type="button" class="btn-muestra" onclick="reproducirMuestra('${esc(idNumTop)}', this, '${rutaMuestraEsc}')">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg>
+          <span>Escuchar muestra oficial</span>
+        </button>` : ''}
+        ${btnMiTomaHtml}
+        ${btnRecorteHtml}
+      </div>
+      ${/^\d+$/.test(idNumTop) ? `<a class="enlace-ficha" href="${urlFichaTop}" target="_blank" rel="noopener noreferrer">Ficha en eldoblaje.com ↗</a>` : ''}
+    </div>
+    ${panelRecorteHtml}` : '';
 
   const vozhHtml = (top.vozh && top.vozh.length) ? `
     <div class="vozh">
@@ -1491,7 +2711,7 @@ function pintar(lista) {
   const totalTxt = top.num_trabajos ? `${top.num_trabajos.toLocaleString('es-ES')} doblajes` : 'filmografía completa';
   const explorarHtml = `
     <div class="filmografia-box" id="filmografia-box">
-      <button type="button" class="btn-explorar" onclick="alternarFilmografia()">
+      <button type="button" id="btn-explorar" class="btn-explorar" aria-expanded="false" onclick="alternarFilmografia()">
         <span>De qué más es · Explorar ${totalTxt}${tiposResumen ? ` (${esc(tiposResumen)})` : ''}</span>
         <span>▾</span>
       </button>
@@ -1506,94 +2726,186 @@ function pintar(lista) {
   const activoDial = lista.dialogo ? (lista.dialogo.activo || 1) : 1;
   const dialogoHtml = lista.dialogo ? `
     <div class="aviso-dialogo">
-      <div class="rotulo"><span>DIÁLOGO EN LA TOMA (2 VOCES DETECTADAS)</span></div>
-      <p>En esta escena se han detectado dos intervenciones con voces distintas:</p>
-      <div class="rotulo"><span>DIÁLOGO EN LA TOMA (2 VOCES DETECTADAS · PULSA PARA CAMBIAR)</span></div>
+      <div class="rotulo"><span>DIÁLOGO EN LA TOMA (2 VOCES · PULSA PARA CAMBIAR)</span></div>
       <p>Se han detectado dos interlocutores distintos. Mostrando ${activoDial === 1 ? 'la 1ª voz' : 'la 2ª voz'}:</p>
       <div class="turnos-dialogo">
-        <div class="turno-box">
-          <span class="etiqueta-turno">1ª VOZ (${lista.dialogo.dur1.toFixed(1)} s)</span>
-        <div class="turno-box" style="${activoDial === 1 ? 'border-color:var(--ambar)' : 'opacity:.78'}" onclick="seleccionarVozDialogo(1)">
+        <div class="turno-box" style="${activoDial === 1 ? 'border-color:var(--ambar)' : 'opacity:.82'}" onclick="seleccionarVozDialogo(1)">
           <span class="etiqueta-turno">1ª VOZ (${lista.dialogo.dur1.toFixed(1)} s)${activoDial === 1 ? ' · ACTIVA' : ''}</span>
           <strong>${esc(lista.dialogo.actor1.nombre)}</strong>
-          <div class="dato">${aPorcentajeCalibrado(lista.dialogo.actor1.parecido)}% coincidencia</div>
+          <div class="turno-pie">
+            <span class="dato" style="margin:0">${aPorcentajeCalibrado(lista.dialogo.actor1.parecido)}% coincidencia</span>
+            ${botonMuestraCompactoHtml(lista.dialogo.actor1)}
+          </div>
         </div>
-        <div class="turno-box">
-          <span class="etiqueta-turno">2ª VOZ (${lista.dialogo.dur2.toFixed(1)} s)</span>
-        <div class="turno-box" style="${activoDial === 2 ? 'border-color:var(--ambar)' : 'opacity:.78'}" onclick="seleccionarVozDialogo(2)">
+        <div class="turno-box" style="${activoDial === 2 ? 'border-color:var(--ambar)' : 'opacity:.82'}" onclick="seleccionarVozDialogo(2)">
           <span class="etiqueta-turno">2ª VOZ (${lista.dialogo.dur2.toFixed(1)} s)${activoDial === 2 ? ' · ACTIVA' : ''}</span>
           <strong>${esc(lista.dialogo.actor2.nombre)}</strong>
-          <div class="dato">${aPorcentajeCalibrado(lista.dialogo.actor2.parecido)}% coincidencia</div>
+          <div class="turno-pie">
+            <span class="dato" style="margin:0">${aPorcentajeCalibrado(lista.dialogo.actor2.parecido)}% coincidencia</span>
+            ${botonMuestraCompactoHtml(lista.dialogo.actor2)}
+          </div>
         </div>
       </div>
     </div>` : '';
 
   const acumHtml = tomasAcumuladas > 1 ? `<div class="dato" style="margin-top:6px; color:var(--ambar); font-weight:600">TOMA ACUMULADA · COMBINANDO ${tomasAcumuladas} TOMAS (${duracionVozAcumulada.toFixed(1)} s DE VOZ)</div>` : '';
+  const gemeloHtml = (!lista.esInspeccion && !lista.desdeHistorial && !lista.esCatalogo && lista.gemeloVocal) ? `
+      <div class="aviso-gemelo">
+        <span>Timbre muy cercano a <strong>${esc(lista.gemeloVocal.nombre)}</strong> (${lista.gemeloVocal.simPct}% de similitud vocal).</span>
+        <button type="button" onclick="alternarCaraACara(${lista.gemeloVocal._idx})">Cara a cara ⇄</button>
+      </div>` : '';
+  const caraACaraHtml = (!lista.esInspeccion && !lista.desdeHistorial && !lista.esCatalogo) ? renderCaraACaraHtml(top, otros) : '';
+  const diagHtml = (!lista.esInspeccion && !lista.desdeHistorial && !lista.esCatalogo && ultimoDiagnostico) ? (() => {
+    const pills = [`<span class="tele-pill">Voz ${ultimoDiagnostico.duracionVoz.toFixed(1)} s</span>`];
+    if (ultimoDiagnostico.f0) {
+      const regTxt = ultimoDiagnostico.f0 < 125 ? 'Grave' : (ultimoDiagnostico.f0 > 185 ? 'Agudo' : 'Medio');
+      pills.push(`<span class="tele-pill">Timbre ${regTxt} (~${Math.round(ultimoDiagnostico.f0)} Hz)</span>`);
+    }
+    if (ultimoDiagnostico.medVoc < 0.48) {
+      pills.push('<span class="tele-pill aviso">Música o ruido de fondo</span>');
+    }
+    return `<div class="diagnostico-acustico">${pills.join('')}</div>`;
+  })() : '';
 
-  res.innerHTML = `
-    ${dialogoHtml}
-    <article class="ficha principal">
-      <div class="rotulo"><span>TOMA ${String(toma).padStart(2, '0')}</span><span>${rotuloFicha}</span></div>
+  const prefijoToma = lista.esCatalogo ? '' : `TOMA ${String(toma).padStart(2, '0')} · `;
+  const esRechazoPuro = estadoId === 'desconocido' && !lista.esInspeccion && !lista.desdeHistorial && !lista.esCatalogo;
+  const cuerpoPrincipalHtml = esRechazoPuro ? `
+      <div class="rotulo"><span>${prefijoToma}${rotuloFicha}</span>${badgeEstado}</div>
       ${ultimaPista ? `<div class="dato" style="margin-top:6px">ENTRE ${ultimaPista.n} ${ultimaPista.n === 1 ? 'VOZ' : 'VOCES'} DE «${esc(ultimaPista.texto.toUpperCase())}»</div>` : ''}
       ${acumHtml}
+      ${diagHtml}
+      <div class="nombre" style="margin-top:16px; font-size:26px">No reconozco esta voz con seguridad</div>
+      <p class="dato" style="margin-top:10px; line-height:1.55">Puede ser un doblador que aún no está en los ${actores ? actores.length : 844} del catálogo, o haber demasiada música/efecto de fondo (${pct}% de similitud máxima).</p>
+      <ul class="consejos-desc">
+        <li>Acerca más el micrófono al altavoz durante una frase sin música.</li>
+        <li>${ultimaPista ? 'Prueba otra frase del mismo personaje o suma una toma más.' : 'Indica arriba qué película o serie estás viendo para afinar.'}</li>
+      </ul>
+      ${tieneAudioUsuario ? `<div class="verificacion-actor"><div class="verificacion-btns">${btnMiTomaHtml}</div></div>` : ''}
+      <div class="acciones">
+        <button class="prim" onclick="btn.click()">Otra toma</button>
+        <button class="sec" onclick="sumarToma()">Sumar toma (+)</button>
+        ${ultimaPista ? '' : '<button onclick="pedirPista()">Qué estoy viendo</button>'}
+      </div>` : `
+      <div class="rotulo"><span>${prefijoToma}${rotuloFicha}</span>${badgeEstado}</div>
+      ${ultimaPista && !lista.esCatalogo ? `<div class="dato" style="margin-top:6px">ENTRE ${ultimaPista.n} ${ultimaPista.n === 1 ? 'VOZ' : 'VOCES'} DE «${esc(ultimaPista.texto.toUpperCase())}»</div>` : ''}
+      ${acumHtml}
+      ${diagHtml}
       <div class="quien">
-        ${foto(top)}
+        ${foto(top, false, true)}
         <div>
           <div class="nombre">${esc(top.nombre)}</div>
-          ${top.num_trabajos ? `<div class="dato">${top.num_trabajos.toLocaleString('es-ES')} DOBLAJES</div>` : ''}
           ${top.num_trabajos ? `<div class="dato">${top.num_trabajos.toLocaleString('es-ES')} DOBLAJES${tiposResumen ? ` · ${esc(tiposResumen.toUpperCase())}` : ''}</div>` : ''}
         </div>
       </div>
       ${verificacionHtml}
-      <div class="medidor">
-      ${!lista.esInspeccion ? `<div class="medidor">
+      ${gemeloHtml}
+      ${caraACaraHtml}
+      ${(!lista.esInspeccion && !lista.desdeHistorial && !lista.esCatalogo) ? `<div class="medidor">
         <div class="rotulo"><span>COINCIDENCIA</span><b>${pct}%</b></div>
         <div class="leds">${Array.from({ length: 20 }, (_, i) =>
           `<i class="${i < encendidos ? 'on' : ''}" style="animation-delay:${i * 40}ms"></i>`).join('')}</div>
-      </div>
       </div>` : ''}
       ${papeles.length ? `<div class="rotulo" style="margin-top:24px"><span>LE HAS OÍDO COMO</span></div>
-      <ul class="guion">${papeles.map(p => `
-        <li class="${p.destacado ? 'acierto-pista' : ''}"><span class="personaje">${esc(p.personaje)}</span>
-            <span class="obra">${esc(p.obra)}${p.anio ? ' · ' + p.anio : ''}</span></li>`).join('')}
       <ul class="guion">${papeles.map(p => {
         const cat = clasificarObraJs(p.obra, p.personaje);
         const obraLimpia = limpiarEtiquetaObraJs(p.obra) || p.obra;
-        return `<li class="${p.destacado ? 'acierto-pista' : ''}"><span class="personaje">${esc(p.personaje)}</span>
-            <span class="obra"><span class="badge-tipo">${ETIQUETAS_TIPO[cat] || 'Obra'}</span>${esc(obraLimpia)}${p.anio ? ' · ' + p.anio : ''}</span></li>`;
+        const clasesLi = [p.destacado ? 'acierto-pista' : '', obraLimpia ? 'filtrable' : ''].filter(Boolean).join(' ');
+        const attrClick = obraLimpia ? ` data-obra="${esc(obraLimpia)}" title="Pulsa para buscar el reparto de ${esc(obraLimpia)}" onclick="filtrarPorObraDesdeFicha(this.dataset.obra)"` : '';
+        return `<li class="${clasesLi}"${attrClick}><span class="personaje">${esc(p.personaje)}</span>
+            <span class="obra"><span class="badge-tipo">${ETIQUETAS_TIPO[cat] || 'Obra'}</span>${esc(obraLimpia)}${p.anio ? ' · ' + p.anio : ''}${obraLimpia ? '<span class="obra-ir">Filtrar ↗</span>' : ''}</span></li>`;
       }).join('')}
       </ul>` : ''}
       ${vozhHtml}
       ${explorarHtml}
-      ${ultimaPista ? '' : `<div class="sin-pista">
+      ${(ultimaPista || lista.esCatalogo) ? '' : `<div class="sin-pista">
         <p>${estadoId === 'identificado' ? '¿Quieres asegurarte?' : '¿No es?'} Dime qué estás viendo y vuelvo a mirar esta misma toma.</p>
         <button onclick="pedirPista()">Decir qué estoy viendo</button></div>`}
       <div class="acciones">
-        <button class="prim" onclick="btn.click()">Otra toma</button>
-        ${estadoId === 'dudoso' ? '<button class="sec" onclick="sumarToma()">Sumar toma (+)</button>' : ''}
+        <button class="prim" onclick="btn.click()">${lista.esCatalogo ? 'Identificar voz' : 'Otra toma'}</button>
+        ${(estadoId === 'dudoso' && !lista.esCatalogo) ? '<button class="sec" onclick="sumarToma()">Sumar toma (+)</button>' : ''}
         <button onclick="compartir()">Compartir</button>
       </div>
-      ${pregunta(otros)}
+      <div class="acciones-util">
+        ${(!lista.esCatalogo && otros.length >= 1) ? '<button type="button" onclick="alternarCaraACara()">Cara a cara ⇄</button>' : ''}
+        <button type="button" onclick="descargarTarjetaImagen()" title="Descargar imagen de la ficha">Tarjeta PNG ↓</button>
+      </div>
+      ${lista.esCatalogo ? '' : pregunta(otros)}`;
+
+  const candidatosLista = esRechazoPuro ? lista : otros;
+  res.innerHTML = `
+    ${dialogoHtml}
+    <article class="ficha principal estado-${estadoId}">
+      ${cuerpoPrincipalHtml}
     </article>
-    ${otros.length ? `<article class="ficha" style="animation-delay:.12s">
-      <div class="rotulo"><span>${estadoId === 'desconocido' ? 'OTRAS VOCES CERCANAS (BAJA FIABILIDAD)' : 'TAMBIÉN PODRÍA SER'}</span></div>
-      <div class="rotulo"><span>${estadoId === 'desconocido' ? 'OTRAS VOCES CERCANAS (BAJA FIABILIDAD · PULSA PARA VER FICHA)' : 'TAMBIÉN PODRÍA SER · PULSA PARA VER DE QUÉ MÁS ES'}</span></div>
-      ${otros.map(o => {
+    ${candidatosLista.length ? `<article class="ficha" style="animation-delay:.12s">
+      <div class="rotulo"><span>${estadoId === 'desconocido' ? 'VOCES MÁS CERCANAS (BAJA FIABILIDAD · PULSA PARA VER FICHA)' : 'TAMBIÉN PODRÍA SER · PULSA PARA VER FILMOGRAFÍA'}</span></div>
+      ${candidatosLista.map(o => {
         const idNumO = String(o.id).split('-')[0];
         const tieneId = /^\d+$/.test(idNumO);
-        return `<div class="otro">${foto(o, true)}<span class="n">${esc(o.nombre)}</span><span class="pct">${aPorcentajeCalibrado(o.parecido)}%</span>${tieneId ? `<a class="enlace-ficha" href="https://www.eldoblaje.com/datos/FichaActorDoblaje.asp?id=${idNumO}" target="_blank" rel="noopener noreferrer" style="font-size:11px; margin-left:4px" title="Ver ficha">↗</a>` : ''}</div>`;
-        return `<div class="otro" onclick="verCandidato(${o._idx})" title="Ver filmografía y muestra de ${esc(o.nombre)}">${foto(o, true)}<span class="n">${esc(o.nombre)}</span><span class="pct">${aPorcentajeCalibrado(o.parecido)}%</span>${tieneId ? `<a class="enlace-ficha" href="https://www.eldoblaje.com/datos/FichaActorDoblaje.asp?id=${idNumO}" target="_blank" rel="noopener noreferrer" style="font-size:11px; margin-left:4px" title="Ver ficha en eldoblaje.com" onclick="event.stopPropagation()">↗</a>` : ''}</div>`;
+        return `<div class="otro" onclick="verCandidato(${o._idx})" title="Ver filmografía y muestra de ${esc(o.nombre)}">${foto(o, true)}<span class="n">${esc(o.nombre)}</span>${botonMuestraCompactoHtml(o)}<span class="pct">${aPorcentajeCalibrado(o.parecido)}%</span>${tieneId ? `<a class="enlace-ficha" href="https://www.eldoblaje.com/datos/FichaActorDoblaje.asp?id=${idNumO}" target="_blank" rel="noopener noreferrer" style="font-size:11px; margin-left:4px" title="Ver ficha en eldoblaje.com" onclick="event.stopPropagation()">↗</a>` : ''}</div>`;
       }).join('')}
     </article>` : ''}`;
   res.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (recorteAbierto) {
+    dibujarCanvasRecorte();
+    vincularArrastreCanvasRecorte();
+  }
+}
+
+async function filtrarPorObraDesdeFicha(obraTxt) {
+  const limpio = tituloBonitoJs(tituloBaseJs(obraTxt)) || limpiarEtiquetaObraJs(obraTxt) || String(obraTxt || '').trim();
+  if (!limpio || !obra) return;
+  const ss = await sugerencias(limpio, 12);
+  const mejor = ss.find(e => e.tipo === 'obra' && e.plano.trim() === plano(limpio).trim()) || ss.find(e => e.tipo === 'obra');
+  if (mejor) {
+    elegir(mejor);
+    obra.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return;
+  }
+  obra.value = limpio;
+  actualizarBotonLimpiar();
+  obra.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (typeof Event !== 'undefined' && obra.dispatchEvent) {
+    obra.dispatchEvent(new Event('focus'));
+    obra.dispatchEvent(new Event('input'));
+  }
+}
+
+function abrirEnlaceInicial() {
+  if (!actores || !actores.length || typeof location === 'undefined') return;
+  try {
+    const hash = (location.hash || '').match(/^#actor=([^&]+)/);
+    const param = typeof URLSearchParams !== 'undefined' ? new URLSearchParams(location.search || '').get('actor') : null;
+    const slug = decodeURIComponent(param || (hash ? hash[1] : '') || '').trim();
+    if (!slug) return;
+    const idx = actores.findIndex(a => a.id === slug);
+    if (idx >= 0) inspeccionarDoblador(idx);
+  } catch {}
 }
 
 async function compartir() {
-  const texto = `🎙️ Acabo de descubrir con Estavoz que esa voz es de ${ultimo.nombre}. ¿Quién pone la voz de lo que estás viendo tú?`;
-  const datos = { title: 'Estavoz', text: texto, url: location.href.split('#')[0] };
+  if (!ultimo) return;
+  const papelTxt = ultimo.papelPista
+    ? ` (${ultimo.papelPista.personaje ? ultimo.papelPista.personaje + ' en ' : ''}${limpiarEtiquetaObraJs(ultimo.papelPista.obra)})`
+    : (ultimaPista ? ` en «${ultimaPista.texto}»` : '');
+  const texto = `🎙️ Acabo de descubrir con Estavoz que esa voz${papelTxt} es de ${ultimo.nombre}. ¿Quién pone la voz de lo que estás viendo tú?`;
+  const baseUrl = location.href.split('#')[0].split('?')[0];
+  const url = `${baseUrl}#actor=${encodeURIComponent(ultimo.id)}`;
+  const datos = { title: 'Estavoz', text: texto, url };
   try {
+    const cv = generarTarjetaCanvas(ultimo);
+    if (cv && typeof cv.toBlob === 'function' && navigator.canShare && typeof File !== 'undefined') {
+      const blob = await new Promise(r => cv.toBlob(r, 'image/png'));
+      if (blob) {
+        const archivo = new File([blob], `estavoz-${ultimo.id || 'voz'}.png`, { type: 'image/png' });
+        if (navigator.canShare({ files: [archivo] })) {
+          await navigator.share({ ...datos, files: [archivo] });
+          return;
+        }
+      }
+    }
     if (navigator.share) await navigator.share(datos);
-    else { await navigator.clipboard.writeText(`${texto} ${datos.url}`); estado.textContent = 'Copiado. ¡Pégalo donde quieras!'; }
+    else { await navigator.clipboard.writeText(`${texto} ${url}`); estado.textContent = 'Copiado. ¡Pégalo donde quieras!'; }
   } catch {}
 }
 
@@ -1651,6 +2963,39 @@ if (chipsCont) {
   });
 }
 
+// Arrastrar y soltar clips de audio o vídeo directamente sobre la sala
+if (sala && typeof sala.addEventListener === 'function') {
+  sala.addEventListener('dragover', ev => { ev.preventDefault(); sala.classList.add('soltando'); });
+  sala.addEventListener('dragleave', ev => {
+    if (ev.target === sala || !sala.contains(ev.relatedTarget)) sala.classList.remove('soltando');
+  });
+  sala.addEventListener('drop', ev => {
+    ev.preventDefault();
+    sala.classList.remove('soltando');
+    const f = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0];
+    if (f && sesion) { btn.disabled = true; toma++; identificar(f); }
+  });
+}
+
+if (typeof document.addEventListener === 'function') {
+  document.addEventListener('keydown', ev => {
+    if (ev.key === 'Escape') {
+      if (listaSug) listaSug.innerHTML = '';
+      const ph = $('panelHistorial');
+      if (ph && !ph.hidden) alternarHistorial();
+      if (caraACaraAbierto) alternarCaraACara();
+      if (recorteAbierto) alternarPanelRecorte();
+    } else if (ev.code === 'Space' && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+      const tag = (ev.target && ev.target.tagName) ? ev.target.tagName.toUpperCase() : '';
+      if (!['INPUT', 'TEXTAREA', 'BUTTON', 'SELECT', 'A'].includes(tag) && btn && !btn.disabled) {
+        ev.preventDefault();
+        btn.click();
+      }
+    }
+  });
+}
+
+actualizarBotonHistorial();
 cargar();
 </script>
 </body>

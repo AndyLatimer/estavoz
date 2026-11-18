@@ -32,25 +32,35 @@ def entrenar_lda(
     X: np.ndarray,
     y: np.ndarray,
     dims: int | None = None,
-    reg: float = 1e-2,
+    reg: float = 1.25,
     cov_acustica: np.ndarray | None = None,
     peso_cov_acustica: float = 0.10,
+    balancear_clases: bool = True,
+    max_peso_clase: int = 24,
 ) -> tuple[np.ndarray, np.ndarray]:
     """X: huellas normalizadas (n, dim); y: actor de cada una. Devuelve (media, matriz W).
 
-    Permite regularización acústica mediante `cov_acustica` (matriz de dispersión inter-canal/sala).
+    Usa contracción de Tikhonov (`reg=1.25`) optimizada para embeddings VoxBlink2 R100
+    (evita sobreajuste en autovectores débiles sobre voces no vistas en entrenamiento),
+    regularización acústica mediante `cov_acustica` y acotación de peso por actor.
     """
     mu = X.mean(0)
     Xc = X - mu
     Sw = np.zeros((X.shape[1],) * 2, dtype=np.float64)
     Sb = np.zeros_like(Sw)
+    peso_total = 0.0
     for c in np.unique(y):
         Xk = Xc[y == c]
+        n_k = len(Xk)
         mk = Xk.mean(0)
-        Sw += (Xk - mk).T @ (Xk - mk)
-        Sb += len(Xk) * np.outer(mk, mk)
-    Sw /= len(X)
-    Sb /= len(X)
+        n_eff = float(min(n_k, max_peso_clase)) if balancear_clases else float(n_k)
+        escala = n_eff / max(n_k, 1)
+        Sw += escala * ((Xk - mk).T @ (Xk - mk))
+        Sb += n_eff * np.outer(mk, mk)
+        peso_total += n_eff
+    denom = max(peso_total, 1.0)
+    Sw /= denom
+    Sb /= denom
 
     if cov_acustica is not None and cov_acustica.shape == Sw.shape:
         peso = max(0.0, min(1.0, float(peso_cov_acustica)))

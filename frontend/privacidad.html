@@ -9,21 +9,24 @@
 <link rel="icon" href="icono.svg" type="image/svg+xml">
 <link rel="stylesheet" href="fuentes/fuentes.css">
 <style>
-  :root { --tinta: #14110f; --cabina: #1d1915; --linea: rgba(243,234,216,.12); --papel: #f3ead8; --gris: #a69a86; --rojo: #e5322d;
+  :root { --tinta: #14110f; --cabina: #1d1915; --linea: rgba(243,234,216,.16); --papel: #f3ead8; --gris: #bfb29c; --rojo: #e5322d; --ambar: #f2b134;
           --serif: Fraunces, Georgia, serif; --mono: "JetBrains Mono", ui-monospace, monospace; }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--tinta); color: var(--papel); font: 17px/1.6 var(--serif); }
-  main { max-width: 640px; margin: 0 auto; padding: 24px 16px 60px; }
+  body { margin: 0; background: var(--tinta); color: var(--papel); font: 17.5px/1.68 var(--serif); -webkit-font-smoothing: antialiased; }
+  a:focus-visible { outline: 2px solid var(--ambar); outline-offset: 2px; border-radius: 2px; }
+  main { max-width: 640px; margin: 0 auto; padding: 24px 18px 64px; }
   .barra-sup { display: flex; justify-content: space-between; align-items: center; padding-bottom: 14px; border-bottom: 1px solid var(--linea); }
   .marca { font-size: 26px; font-style: italic; font-weight: 600; color: var(--papel); text-decoration: none; }
   .marca b { color: var(--rojo); font-style: normal; }
-  .volver { font: 600 11px var(--mono); letter-spacing: .14em; color: var(--gris); text-decoration: none; }
+  .volver { font: 600 12px var(--mono); letter-spacing: .12em; color: var(--gris); text-decoration: none; }
+  .volver:hover { color: var(--papel); }
   h1 { font-weight: 400; font-size: 40px; line-height: 1.05; margin: 32px 0 8px; }
-  h2 { font: 600 12px var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--gris); margin: 34px 0 6px; }
+  h2 { font: 600 12.5px var(--mono); letter-spacing: .15em; text-transform: uppercase; color: var(--gris); margin: 34px 0 8px; }
   p, li { color: var(--papel); }
+  li { margin: 6px 0; }
   .fecha { font: 12px var(--mono); color: var(--gris); }
   a { color: var(--papel); text-underline-offset: 3px; }
-  .caja { background: var(--cabina); border: 1px solid var(--linea); border-left: 3px solid var(--rojo); border-radius: 6px; padding: 14px 18px; margin-top: 20px; }
+  .caja { background: var(--cabina); border: 1px solid var(--linea); border-left: 3px solid var(--rojo); border-radius: 6px; padding: 15px 18px; margin-top: 20px; }
 </style>
 </head>
 <body>
@@ -34,7 +37,7 @@
   </div>
 
   <h1>Privacidad</h1>
-  <div class="fecha">ÚLTIMA ACTUALIZACIÓN: 17 DE OCTUBRE DE 2026</div>
+  <div class="fecha">ÚLTIMA ACTUALIZACIÓN: 18 DE NOVIEMBRE DE 2026</div>
 
   <div class="caja">En corto: <b>el audio que grabas no sale nunca de tu dispositivo</b>. Solo si respondes a «¿Acertamos?»
     se guarda una huella numérica anónima de la voz, sin el audio, para que Estavoz aprenda.</div>
@@ -44,8 +47,8 @@
     <a href="mailto:mrharrisonsmail@gmail.com">mrharrisonsmail@gmail.com</a>.</p>
 
   <h2>Qué hace Estavoz con el micrófono</h2>
-  <p>Cuando pulsas el botón, el navegador graba 10 segundos. Esa grabación se analiza <b>en tu propio dispositivo</b>:
-    se calcula una «huella de voz» (una lista de 192 números) y se compara con las de los actores de doblaje que
+  <p>Cuando pulsas el botón, el navegador graba hasta 10 segundos. Esa grabación se analiza <b>en tu propio dispositivo</b>:
+    se calcula una «huella de voz» (una lista de 256 números) y se compara con las de los actores de doblaje que
     vienen incluidas en la web. La grabación no se envía a ningún servidor y se descarta al terminar.
     Lo mismo ocurre si subes un archivo de audio.</p>
 
@@ -54,6 +57,7 @@
   <ul>
     <li>la huella de voz de la grabación (los números, <b>no el audio</b>; a partir de ella no se puede reconstruir lo que se oyó),</li>
     <li>qué actor propuso Estavoz, si acertó y, si nos lo dices, quién era,</li>
+    <li>datos técnicos anónimos de calibración (versión del modelo, grado de confianza o similitud, registro tonal aproximado en hercios, número de tomas acumuladas y si había un filtro contextual activo, <b>sin guardar qué obra buscaste</b>),</li>
     <li>la fecha y hora.</li>
   </ul>
   <p>No guardamos tu nombre, tu correo ni ningún identificador tuyo. Usamos estas respuestas solo para mejorar el

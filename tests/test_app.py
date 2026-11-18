@@ -84,6 +84,10 @@ def test_app_identificar_audio_valido(cliente):
     assert "slug" in primer_candidato
     assert "parecido" in primer_candidato
     assert "nombre" in primer_candidato
+    assert "diagnostico" in datos
+    diag = datos["diagnostico"]
+    assert diag["duracion_voz_seg"] > 1.5
+    assert diag["f0_hz"] is not None and abs(diag["f0_hz"] - 150.0) < 15.0
 
 
 def test_app_buscar_sugerencias(cliente):
@@ -118,6 +122,17 @@ def test_app_identificar_con_pista_contextual(cliente):
     assert len(datos["resultados"]) > 0
     assert "porcentaje" in datos["resultados"][0]
 
+    # Intersección de múltiples pistas separadas por '+'
+    res_inter = cliente.post(
+        "/api/identificar?pista=Toy+Story+%2B+Los+Simpson",
+        files={"audio": ("prueba_inter.wav", wav_valido, "audio/wav")},
+    )
+    assert res_inter.status_code == 200
+    datos_inter = res_inter.json()
+    assert "contexto" in datos_inter
+    assert datos_inter["contexto"]["tipo"] in ("interseccion", "union")
+    assert datos_inter["contexto"]["num_candidatos"] <= ctx["num_candidatos"]
+
 
 def test_app_detalle_actor_y_filmografia_filtrable(cliente):
     """Verifica `/api/actor/{actor_id}` para explorar en qué más sale un doblador (pelis, series, juegos...)."""
@@ -139,5 +154,20 @@ def test_app_detalle_actor_y_filmografia_filtrable(cliente):
     assert "conteo_tipos" in det["filmografia"]
     assert isinstance(det["filmografia"]["items"], list)
 
+    res_dob = cliente.get(f"/api/buscar?q={det['nombre']}")
+    assert res_dob.status_code == 200
+    assert any(it.get("tipo") == "doblador" and it.get("actor_id") == slug for it in res_dob.json())
+
     res_404 = cliente.get("/api/actor/000000-actor-inexistente")
     assert res_404.status_code == 404
+
+
+def test_penalizacion_f0_graduada():
+    """Verifica la penalización graduada de F0 (extrema 0.035 e intermedia 0.020)."""
+    from app import _penalizacion_f0
+    assert _penalizacion_f0(105.0, 225.0) == 0.035
+    assert _penalizacion_f0(225.0, 105.0) == 0.035
+    assert _penalizacion_f0(124.0, 225.0) == 0.020
+    assert _penalizacion_f0(200.0, 105.0) == 0.020
+    assert _penalizacion_f0(150.0, 105.0) == 0.0
+    assert _penalizacion_f0(None, 225.0) == 0.0

@@ -175,3 +175,95 @@ def test_filtrar_trozos_intrusos_y_blindaje_respuestas(tmp_path: Path):
         peso_respuestas=0.35,
     )
     assert float(C_mix[0] @ v_a) > float(C_mix[0] @ v_b)
+
+
+def test_voz_trozos_alineacion_6s_y_consenso_respuestas(tmp_path: Path):
+    """Valida alineación en bloques de 6 s y consenso estricto para correcciones acierto=False."""
+    import voz
+
+    if str(RAIZ / "despliegue") not in sys.path:
+        sys.path.insert(0, str(RAIZ / "despliegue"))
+    from exportar_web import VERSION_MODELO, respuestas_validas
+
+    # Audios de 7 s y 10 s: ambos deben generar dos ventanas completas de 6 s solapadas
+    audio_7s = np.zeros(voz.SAMPLE_RATE * 7, dtype=np.float32)
+    lista_7s = voz.trozos(audio_7s, filtrar_silencio=False)
+    assert len(lista_7s) == 2
+    assert all(len(t) == voz.TROZO_SEG * voz.SAMPLE_RATE for t in lista_7s)
+
+    audio_10s = np.zeros(voz.SAMPLE_RATE * 10, dtype=np.float32)
+    lista_trozos = voz.trozos(audio_10s, filtrar_silencio=False)
+    assert len(lista_trozos) == 2
+    assert all(len(t) == voz.TROZO_SEG * voz.SAMPLE_RATE for t in lista_trozos)
+
+    dim = 8
+    mu = np.zeros(dim, dtype=np.float32)
+    W = np.eye(dim, dtype=np.float32)
+    C = np.eye(4, dim, dtype=np.float32)
+    slugs = ["actor-0", "actor-1", "actor-2", "actor-3"]
+
+    # Corrección acierto=False con similitud moderada (0.36-0.37, < 0.42) en Top-3:
+    # con una sola contribución debe quedar retenida hasta reunir consenso >= 2
+    h1 = np.zeros(dim, dtype=np.float32)
+    h1[1] = 0.36
+    h1[4] = float(np.sqrt(1.0 - 0.36**2))
+    h2 = np.zeros(dim, dtype=np.float32)
+    h2[1] = 0.37
+    h2[5] = float(np.sqrt(1.0 - 0.37**2))
+
+    ruta_resp = tmp_path / "respuestas_consenso.json"
+    una_correccion = [
+        {
+            "version": VERSION_MODELO,
+            "propuesto": "actor-0",
+            "real": "actor-1",
+            "acierto": False,
+            "huellas": [h1.tolist()],
+        }
+    ]
+    ruta_resp.write_text(json.dumps(una_correccion), encoding="utf-8")
+    Xr1, yr1 = respuestas_validas(mu, W, C, slugs, ruta_respuestas=ruta_resp)
+    assert len(Xr1) == 0 and yr1 == []
+
+    dos_correcciones = una_correccion + [
+        {
+            "version": VERSION_MODELO,
+            "propuesto": "actor-2",
+            "real": "actor-1",
+            "acierto": False,
+            "huellas": [h2.tolist()],
+        }
+    ]
+    ruta_resp.write_text(json.dumps(dos_correcciones), encoding="utf-8")
+    Xr2, yr2 = respuestas_validas(mu, W, C, slugs, ruta_respuestas=ruta_resp)
+    assert len(Xr2) == 2 and yr2 == ["actor-1", "actor-1"]
+
+
+def test_aprender_descarga_paginada_compatible_con_columnas_nuevas(monkeypatch):
+    """Comprueba que `backend/aprender.py` descarga con `select=*` y paginación sin fallar."""
+    import aprender
+
+    llamadas = []
+
+    class _RespFake:
+        def __init__(self, datos):
+            self._datos = datos
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._datos
+
+    def _fake_get(url, headers=None, params=None, timeout=60):
+        llamadas.append((url, headers, params, timeout))
+        if headers["Range"] == "0-999":
+            return _RespFake([{"id": i, "version": "3", "estado": "identificado"} for i in range(1000)])
+        return _RespFake([{"id": 1000, "version": "3", "estado": "dudoso"}])
+
+    monkeypatch.setattr(aprender.requests, "get", _fake_get)
+    filas = aprender.descargar_respuestas("https://demo.supabase.co/rest/v1/", "secret-key")
+    assert len(filas) == 1001
+    assert llamadas[0][0] == "https://demo.supabase.co/rest/v1/respuestas"
+    assert llamadas[0][2]["select"] == "*"
+    assert llamadas[1][1]["Range"] == "1000-1999"

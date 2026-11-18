@@ -38,16 +38,19 @@ RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ / "backend"))
 sys.path.insert(0, str(RAIZ / "scraper"))
 
-from auditar_indice import filtrar_trozos_intrusos  # noqa: E402
-from aumento_acustico import DetectorVoz, segmentar_intervenciones, simular_sala_tv  # noqa: E402
+from auditar_indice import filtrar_trozos_intrusos, hidratar_f0_catalogo_web  # noqa: E402
+from aumento_acustico import (  # noqa: E402
+    DetectorVoz,
+    estimar_f0_mediana,
+    segmentar_intervenciones,
+    simular_sala_tv,
+)
 import eldoblaje  # noqa: E402
 from filmografia import (  # noqa: E402
-    nombre_original,
+    construir_entradas_busqueda,
+    exportar_indices_busqueda,
     normalizar_texto,
-    personaje_base,
     resumen_actor_desde_papeles,
-    titulo_base,
-    titulo_bonito,
 )
 from lda import normaliza, proyectar  # noqa: E402
 from metadatos_modelo import validar_artefactos_web  # noqa: E402
@@ -168,6 +171,7 @@ def guardar_estado_web(estado: dict[str, Any], carpeta_datos: Path = DATOS_WEB) 
         json.dumps(meta, ensure_ascii=False, separators=(",", ":")),
         encoding="utf-8",
     )
+    hidratar_f0_catalogo_web(carpeta_datos)
     return validar_artefactos_web(carpeta_datos, ruta_onnx=RUTA_ONNX if RUTA_ONNX.exists() else None)
 
 
@@ -331,36 +335,15 @@ def hidratar_filmografias_y_busqueda(
             if ficha_web["muestras"] and not a.get("muestra"):
                 a["muestra"] = ficha_web["muestras"][0]["ruta"]
 
-    # 3. Reconstruir `busqueda.json` completo a partir de todos los papeles/*.json
-    from collections import defaultdict
-    from filmografia import _PERSONAJES_GENERICOS  # reuse existing set
-    obras, personajes, originales = defaultdict(set), defaultdict(set), defaultdict(set)
-    veces_p, veces_o = defaultdict(int), defaultdict(int)
+    # 3. Reconstruir `busqueda.json` + fragmentos web (`busqueda_top.json`, `busqueda/00..63.json`)
     todas_filas: list[list] = []
     for i in range(len(actores)):
         p_path = papeles_dir / f"{i}.json"
         filas = json.loads(p_path.read_text(encoding="utf-8")) if p_path.exists() else []
         todas_filas.append(filas)
-        for fila in filas:
-            obra_raw, pers_raw, _anio, orig_raw = fila[0], fila[1], fila[2], fila[3]
-            if (o := titulo_base(str(obra_raw))):
-                obras[o].add(i)
-            if (p := personaje_base(str(pers_raw))) and len(p) >= 3 and p.lower() not in _PERSONAJES_GENERICOS:
-                pk = p.title() if p.isupper() else p
-                personajes[pk].add(i)
-                veces_p[pk] += 1
-            if (orig := nombre_original(str(orig_raw))):
-                originales[orig].add(i)
-                veces_o[orig] += 1
 
-    entradas = [["obra", titulo_bonito(t), sorted(v)] for t, v in obras.items()]
-    entradas += [["personaje", t, sorted(v)] for t, v in personajes.items() if veces_p[t] >= 3 or len(v) <= 2]
-    entradas += [["actor", t, sorted(v)] for t, v in originales.items() if veces_o[t] >= 3]
-    entradas.sort(key=lambda e: (-len(e[2]), e[1]))
-    (carpeta_datos / "busqueda.json").write_text(
-        json.dumps(entradas, ensure_ascii=False, separators=(",", ":")),
-        encoding="utf-8",
-    )
+    entradas = construir_entradas_busqueda(todas_filas)
+    exportar_indices_busqueda(entradas, carpeta_datos)
 
     popularidad = {e[1].lower(): len(e[2]) for e in entradas if e[0] == "obra"}
 
@@ -389,6 +372,7 @@ def _anadir_actor_nuevo(
     id_eld: str,
     ficha_web: dict[str, Any],
     vecs_proy: np.ndarray,
+    f0: float | None = None,
 ) -> int:
     """Inserta un nuevo doblador en `estado` y escribe su `papeles/<idx>.json` y foto."""
     idx = len(estado["actores"])
@@ -422,6 +406,8 @@ def _anadir_actor_nuevo(
         actor_obj["resumen_tipos"] = resumen["resumen_tipos"]
     if resumen["vozh"]:
         actor_obj["vozh"] = resumen["vozh"]
+    if f0 is not None and 60.0 <= float(f0) <= 380.0:
+        actor_obj["f0"] = round(float(f0), 1)
 
     estado["actores"].append(actor_obj)
     centro = normaliza(vecs_proy.mean(axis=0)).astype(np.float32)[None, :]
@@ -450,14 +436,14 @@ def incorporar_desde_eldoblaje(
 
     reforzados = 0
     if not solo_forzados:
-        # 1. Actores existentes con poca cobertura (<= 6 trozos) y muestra alternativa o extra
+        # 1. Actores existentes con poca cobertura (<= 6 trozos) priorizando los más prolíficos
         bajos = [
-            (len(estado["trozos_por_actor"][i]), i, a)
+            (len(estado["trozos_por_actor"][i]), -int(a.get("num_trabajos") or len(a.get("trabajos") or [])), i, a)
             for i, a in enumerate(estado["actores"])
             if len(estado["trozos_por_actor"][i]) <= 6 and str(a["id"]).split("-")[0].isdigit()
         ]
         bajos.sort()
-        for _cnt, idx, a in bajos[:max_bajo_conteo]:
+        for _cnt, _neg_trab, idx, a in bajos[:max_bajo_conteo]:
             id_num = str(a["id"]).split("-")[0]
             ficha_web = eldoblaje.obtener_ficha_web(id_num, a["nombre"], descargar_todos_trabajos=False)
             if ficha_web is None or not ficha_web["muestras"]:
@@ -486,6 +472,10 @@ def incorporar_desde_eldoblaje(
                 vecs = _embeddings_de_audio(audio, mu, W, semilla=int(id_num))
                 if len(vecs) == 0:
                     continue
+                if not a.get("f0"):
+                    f0_est = estimar_f0_mediana(audio)
+                    if f0_est is not None and 60.0 <= f0_est <= 380.0:
+                        a["f0"] = round(float(f0_est), 1)
                 # Filtrar trozos que no concuerdan con el actor si ya tiene centroide de referencia
                 sims = vecs @ estado["C"][idx]
                 validos = vecs[sims >= 0.20]
@@ -516,6 +506,7 @@ def incorporar_desde_eldoblaje(
         if not ficha_web["muestras"]:
             continue
         vecs_actor = []
+        f0s_actor = []
         for m in ficha_web["muestras"]:
             mp3_bytes = _descargar_bytes(eldoblaje.BASE + m["ruta"], max_bytes=4 << 20, timeout=20)
             if not mp3_bytes:
@@ -527,6 +518,9 @@ def incorporar_desde_eldoblaje(
             v = _embeddings_de_audio(audio, mu, W, semilla=int(id_num))
             if len(v):
                 vecs_actor.append(v)
+                f0_m = estimar_f0_mediana(audio)
+                if f0_m is not None and 60.0 <= f0_m <= 380.0:
+                    f0s_actor.append(float(f0_m))
         if not vecs_actor:
             continue
         V_new = np.vstack(vecs_actor).astype(np.float32)
@@ -536,7 +530,8 @@ def incorporar_desde_eldoblaje(
         ficha_completa = eldoblaje.obtener_ficha_web(id_num, ficha_web["nombre"], descargar_todos_trabajos=True)
         if ficha_completa is not None and len(ficha_completa["trabajos_completos"]) >= len(ficha_web["trabajos_completos"]):
             ficha_web = ficha_completa
-        _anadir_actor_nuevo(estado, carpeta_datos, id_num, ficha_web, V_new)
+        f0_med = float(np.median(f0s_actor)) if f0s_actor else None
+        _anadir_actor_nuevo(estado, carpeta_datos, id_num, ficha_web, V_new, f0=f0_med)
         por_id_num[id_num] = len(estado["actores"]) - 1
         agregados += 1
         print(f"  [eldoblaje NEW] {ficha_web['id']} ({len(V_new)} trozos, {len(ficha_web['trabajos_completos'])} trabajos)", flush=True)
@@ -841,7 +836,7 @@ def incorporar_desde_podcasts(
             vecs_new = _embeddings_de_audio(audio_all, mu, W, semilla=sem)
             if len(vecs_new) < 4:
                 continue
-            _anadir_actor_nuevo(estado, carpeta_datos, id_eld, ficha_web, vecs_new)
+            _anadir_actor_nuevo(estado, carpeta_datos, id_eld, ficha_web, vecs_new, f0=estimar_f0_mediana(audio_all))
             por_nombre[normalizar_texto(ficha_web["nombre"])] = len(estado["actores"]) - 1
             C_norm = normaliza(estado["C"])
             nuevos_agregados += 1

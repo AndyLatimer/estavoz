@@ -19,6 +19,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from metadatos_modelo import validar_compatibilidad_indice  # noqa: E402
+from aumento_acustico import estimar_f0_mediana  # noqa: E402
 from simular_movil import movil_real as movil  # noqa: E402
 from voz import TROZO_SEG, cargar_audio, huellas, info_modelo_actual  # noqa: E402
 
@@ -77,6 +78,7 @@ def main():
                 fichas[carpeta.name] = json.loads(ficha_path.read_text(encoding="utf-8"))
             continue
         inicio, n_vect_inicio = len(etiquetas), len(vectores)
+        f0s_actor = []
         for clip in clips:
             if f"{carpeta.name}/{clip.name}" in hechos:
                 n += 1  # ya estaba en el índice
@@ -87,6 +89,9 @@ def main():
             except Exception as e:  # clip roto: seguimos con el resto
                 print(f"  ! {clip.name}: {e}")
                 continue
+            f0_clip = estimar_f0_mediana(audio)
+            if f0_clip is not None and 60.0 <= f0_clip <= 380.0:
+                f0s_actor.append(float(f0_clip))
             vectores.append(h)
             etiquetas += [carpeta.name] * len(h)
             clips_id += [f"{carpeta.name}/{clip.name}"] * len(h)
@@ -106,7 +111,10 @@ def main():
                 etiquetas += [carpeta.name] * len(hs)
                 clips_id += [f"{carpeta.name}/{clip.name}#sala"] * len(hs)
         if n:
-            fichas[carpeta.name] = json.loads(ficha_path.read_text(encoding="utf-8"))
+            ficha_actor = json.loads(ficha_path.read_text(encoding="utf-8"))
+            if f0s_actor:
+                ficha_actor["f0"] = round(float(np.median(f0s_actor)), 1)
+            fichas[carpeta.name] = ficha_actor
         if guardado:
             guardado.parent.mkdir(parents=True, exist_ok=True)
             v = vectores[n_vect_inicio:]

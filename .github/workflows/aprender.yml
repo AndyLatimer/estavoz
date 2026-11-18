@@ -29,7 +29,10 @@ jobs:
 
       - name: Instalar dependencias
         # solo combina huellas ya calculadas con las respuestas e incorpora fuentes curadas vía ONNX
-        run: pip install numpy scipy requests huggingface_hub onnxruntime soundfile
+        run: pip install numpy scipy requests huggingface_hub onnxruntime soundfile pytest fastapi httpx python-multipart onnx
+
+      - name: Verificar frontend y módulos antes de construir
+        run: pytest -q --ignore=tests/test_app.py
 
       - name: Bajar datos (copia privada) y modelo
         env:
@@ -44,11 +47,15 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python backend/aprender.py
 
-      - name: Rehacer los datos de la web, incorporar fuentes curadas y publicar
+      - name: Rehacer los datos de la web, incorporar fuentes curadas y validar
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
           ESTAVOZ_ONNX: frontend/modelo/voxblink-int8.onnx
         run: |
           python despliegue/exportar_web.py
           python backend/incorporar_voces.py --curados
-          python despliegue/subir_a_huggingface.py "${{ vars.HF_SPACE }}"
+          pytest -q tests/test_app.py tests/test_rechazo.py tests/test_frontend.py tests/test_metadatos_modelo.py
+
+      - name: Publicar en Hugging Face Spaces
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: python despliegue/subir_a_huggingface.py "${{ vars.HF_SPACE }}"

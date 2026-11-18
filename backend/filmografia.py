@@ -231,3 +231,101 @@ def filtrar_papeles_actor(
         "items": items[offset : offset + limite],
     }
 
+
+STOPWORDS_BUSQUEDA = frozenset({
+    "de", "del", "la", "las", "el", "los", "lo", "un", "una",
+    "en", "al", "con", "por", "para", "sin", "the", "of", "and", "in",
+})
+
+
+def bucket_busqueda(prefijo2: str, n_shards: int = 64) -> int:
+    """Hash determinista de 2 caracteres idéntico al cliente web para fragmentar `busqueda`."""
+    return (ord(prefijo2[0]) * 31 + ord(prefijo2[1])) % n_shards
+
+
+def clave_orden_busqueda(entrada: list[Any]) -> tuple[int, float, int, str]:
+    """Prioriza obras y actores originales relevantes sobre nombres genéricos de pila."""
+    tipo, txt, ids = entrada[0], str(entrada[1]), entrada[2]
+    n = len(ids)
+    if tipo == "obra":
+        return (0, -(n * 3.0), len(txt), txt)
+    if tipo == "actor":
+        return (1, -(n * 2.2), len(txt), txt)
+    if " " not in txt and n >= 8:
+        return (3, -(n * 0.1), len(txt), txt)
+    return (2, -(n * 1.0), len(txt), txt)
+
+
+def construir_entradas_busqueda(filas_por_actor: list[list[dict | list | tuple]]) -> list[list[Any]]:
+    """Construye la lista ordenada `[tipo, texto, [indices_actor]]` a partir de las filas por actor."""
+    from collections import defaultdict
+
+    obras, personajes, originales = defaultdict(set), defaultdict(set), defaultdict(set)
+    veces_p, veces_o = defaultdict(int), defaultdict(int)
+    for i, filas in enumerate(filas_por_actor):
+        for fila in filas:
+            obra_raw, pers_raw, _anio, orig_raw = _normalizar_fila(fila)
+            if (o := titulo_base(obra_raw)):
+                obras[o].add(i)
+            if (p := personaje_base(pers_raw)) and len(p) >= 3 and p.lower() not in _PERSONAJES_GENERICOS:
+                pk = p.title() if p.isupper() else p
+                personajes[pk].add(i)
+                veces_p[pk] += 1
+            if (orig := nombre_original(orig_raw)):
+                originales[orig].add(i)
+                veces_o[orig] += 1
+
+    salida: list[list[Any]] = [["obra", titulo_bonito(t), sorted(v)] for t, v in obras.items()]
+    salida += [["personaje", t, sorted(v)] for t, v in personajes.items() if veces_p[t] >= 3 or len(v) <= 2]
+    salida += [["actor", t, sorted(v)] for t, v in originales.items() if veces_o[t] >= 3]
+    salida.sort(key=clave_orden_busqueda)
+    return salida
+
+
+def exportar_indices_busqueda(
+    entradas: list[list[Any]],
+    carpeta_datos: Path,
+    top_n: int = 8000,
+    n_shards: int = 64,
+) -> dict[str, int]:
+    """Escribe `busqueda.json` (backend), `busqueda_top.json` y `busqueda/00..63.json` (web)."""
+    import json
+    import shutil
+    from collections import defaultdict
+
+    carpeta_datos.mkdir(parents=True, exist_ok=True)
+    entradas_ord = sorted(entradas, key=clave_orden_busqueda)
+    (carpeta_datos / "busqueda.json").write_text(
+        json.dumps(entradas_ord, ensure_ascii=False, separators=(",", ":")),
+        encoding="utf-8",
+    )
+
+    top = entradas_ord[:top_n]
+    top_txt = json.dumps(top, ensure_ascii=False, separators=(",", ":"))
+    (carpeta_datos / "busqueda_top.json").write_text(top_txt, encoding="utf-8")
+
+    dir_shards = carpeta_datos / "busqueda"
+    shutil.rmtree(dir_shards, ignore_errors=True)
+    dir_shards.mkdir(parents=True, exist_ok=True)
+
+    buckets: dict[int, list[list[Any]]] = defaultdict(list)
+    for e in entradas_ord[top_n:]:
+        ws = [w for w in normalizar_texto(str(e[1])).split() if len(w) >= 2]
+        claves = [w for w in ws if w not in STOPWORDS_BUSQUEDA] or ws
+        destinos = {bucket_busqueda(w[:2], n_shards) for w in claves} if claves else {0}
+        for b in destinos:
+            buckets[b].append(e)
+
+    for b in range(n_shards):
+        (dir_shards / f"{b:02d}.json").write_text(
+            json.dumps(buckets.get(b, []), ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+
+    return {
+        "total": len(entradas_ord),
+        "top": len(top),
+        "bytes_top": len(top_txt.encode("utf-8")),
+        "shards": n_shards,
+    }
+

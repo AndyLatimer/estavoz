@@ -48,7 +48,7 @@ def main():
         shutil.copytree(WEB, tmp)
         (tmp / "README.md").write_text(CABECERA, encoding="utf-8")
         # delete_patterns: quita fotos y datos viejos que ya no estén en esta versión
-        api.upload_folder(repo_id=repo, repo_type="space", folder_path=tmp, delete_patterns=["fotos/*", "datos/*", "modelo/*"],
+        api.upload_folder(repo_id=repo, repo_type="space", folder_path=tmp, delete_patterns=["fotos/*", "datos/*", "datos/busqueda/*", "datos/papeles/*", "modelo/*"],
                           commit_message="Actualizar Estavoz")
     usuario, nombre = repo.split("/")
     print(f"Subido: https://huggingface.co/spaces/{repo}")

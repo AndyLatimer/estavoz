@@ -119,6 +119,9 @@ def centroides_mezcla_web(
     return np.where(normas > 0, C / np.maximum(normas, 1e-12), 0.0).astype(np.float32)
 
 
+PESOS_RANGO_TOP4: tuple[float, ...] = (0.34, 0.27, 0.21, 0.18)
+
+
 def puntuar_navegador(
     Q_proy: np.ndarray,
     C_galeria: np.ndarray,
@@ -128,6 +131,7 @@ def puntuar_navegador(
     peso_centroide: float = 0.5,
     top_k_trozos: int = 3,
     beta_exceso_trozos: float = 0.0,
+    pesos_rango: tuple[float, ...] | None = None,
 ) -> np.ndarray:
     """Calcula la puntuación exacta de `puntuar()` en `frontend/index.html` (líneas 330-343).
 
@@ -161,7 +165,12 @@ def puntuar_navegador(
         a, b = int(ini[i]), int(fin[i])
         if b > a:
             n_disp = b - a
-            mejores = float(sv_ord[a : min(b, a + top_k_trozos)].mean())
+            top_vals = sv_ord[a : min(b, a + top_k_trozos)]
+            if pesos_rango is not None and len(top_vals) > 0:
+                w = np.asarray(pesos_rango[: len(top_vals)], dtype=np.float32)
+                mejores = float(np.dot(top_vals, w) / max(float(w.sum()), 1e-9))
+            else:
+                mejores = float(top_vals.mean())
             penal = float(beta_exceso_trozos * max(0.0, np.log(max(n_disp, 1) / 12.0))) if beta_exceso_trozos > 0 else 0.0
         else:
             mejores = m
@@ -212,7 +221,7 @@ class ConfigEvaluacion:
     pliegues_lda: int = 5
     entrenar_lda_en_pliegues: bool = True
     semilla: int = 0
-    reg_lda: float = 1e-2
+    reg_lda: float = 1.25
     dims_lda: int | None = None
     peso_entrevistas: float = 0.5
     peso_centroide: float = 0.5
@@ -223,6 +232,7 @@ class ConfigEvaluacion:
     cuantizar_trozos_int8: bool = True
     usar_cov_acustica: bool = False
     peso_cov_acustica: float = 0.10
+    usar_pesos_rango: bool = True
     # Si es True, al evaluar un clip de eldoblaje excluye también de la galería del actor los clips
     # extraídos de podcasts/entrevistas/voces cuya selección dependió del índice previo.
     solo_galeria_independiente: bool = False
@@ -506,11 +516,18 @@ def ejecutar_evaluacion_completa(
             sims_all[excl] = -np.inf
 
         sims_actor = sims_all[matriz_idx_actor]
-        top_k_vals = -np.partition(-sims_actor, kth=k_top - 1, axis=1)[:, :k_top]
+        top_k_vals = -np.sort(np.partition(-sims_actor, kth=k_top - 1, axis=1)[:, :k_top], axis=1)
         finitos = np.isfinite(top_k_vals)
+        vals_seguros = np.where(finitos, top_k_vals, 0.0)
         cuenta_f = finitos.sum(axis=1)
-        suma_f = np.where(finitos, top_k_vals, 0.0).sum(axis=1)
-        mejores = np.where(cuenta_f > 0, suma_f / np.maximum(cuenta_f, 1), media_cent)
+        if cfg.usar_pesos_rango and k_top == len(PESOS_RANGO_TOP4):
+            w_arr = np.asarray(PESOS_RANGO_TOP4, dtype=np.float32)[None, :]
+            w_f = np.where(finitos, w_arr, 0.0)
+            suma_f = (vals_seguros * w_f).sum(axis=1)
+            mejores = np.where(cuenta_f > 0, suma_f / np.maximum(w_f.sum(axis=1), 1e-9), media_cent)
+        else:
+            suma_f = vals_seguros.sum(axis=1)
+            mejores = np.where(cuenta_f > 0, suma_f / np.maximum(cuenta_f, 1), media_cent)
         punt_abierto = (cfg.peso_centroide * media_cent + (1.0 - cfg.peso_centroide) * mejores).astype(np.float32)
         if cfg.as_norm_peso > 0:
             punt_abierto = aplicar_as_norm(
@@ -518,6 +535,23 @@ def ejecutar_evaluacion_completa(
             )
 
         orden_ab = np.argsort(-punt_abierto)
+        if cfg.usar_pesos_rango and len(orden_ab) >= 2:
+            c1, c2 = int(orden_ab[0]), int(orden_ab[1])
+            if float(punt_abierto[c1] - punt_abierto[c2]) < 0.035:
+                m1 = float(vals_seguros[c1, 0]) if finitos[c1, 0] else float(media_cent[c1])
+                m2 = float(vals_seguros[c2, 0]) if finitos[c2, 0] else float(media_cent[c2])
+                bono_vec = 0.0
+                if len(orden_ab) >= 4:
+                    vecs_ext = orden_ab[2 : min(10, len(orden_ab))]
+                    C_vec = C_fold[vecs_ext]
+                    sim_v1 = float((C_fold[c1] @ C_vec.T).mean())
+                    sim_v2 = float((C_fold[c2] @ C_vec.T).mean())
+                    bono_vec = 0.025 * (sim_v2 - sim_v1)
+                if float(punt_abierto[c2]) + 0.035 * (m2 - m1) + bono_vec > float(punt_abierto[c1]):
+                    s_hi, s_lo = float(punt_abierto[c1]), float(punt_abierto[c2])
+                    punt_abierto[c2] = max(s_hi, s_lo + 1e-4)
+                    punt_abierto[c1] = min(s_lo, s_hi - 1e-4)
+                    orden_ab[0], orden_ab[1] = c2, c1
         top1_ab = actores_galeria[int(orden_ab[0])]
         top3_ab = [actores_galeria[int(i)] for i in orden_ab[:3]]
         s1_ab = float(punt_abierto[orden_ab[0]])

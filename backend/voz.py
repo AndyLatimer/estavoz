@@ -117,8 +117,21 @@ def cargar_audio(ruta: str | Path, separar: bool = False, max_seg: int | None = 
 
 def trozos(audio: np.ndarray, filtrar_silencio: bool = False) -> list[np.ndarray]:
     paso = TROZO_SEG * SAMPLE_RATE
-    partes = [audio[i:i + paso] for i in range(0, len(audio), paso)]
-    candidatos = [p for p in partes if len(p) >= TROZO_MIN_SEG * SAMPLE_RATE]
+    min_muestras = TROZO_MIN_SEG * SAMPLE_RATE
+    if len(audio) < min_muestras:
+        return []
+    if len(audio) < int(6.5 * SAMPLE_RATE):
+        candidatos = [audio[:paso]] if len(audio) > paso else [audio]
+    else:
+        candidatos = []
+        min_cola = int(0.5 * SAMPLE_RATE)
+        for i in range(0, len(audio), paso):
+            trozo = audio[i : i + paso]
+            if len(trozo) == paso:
+                candidatos.append(trozo)
+            elif len(trozo) >= min_cola:
+                # Ventana solapada completa de 6 s al final para aprovechar tomas >= 6.5 s sin colas cortas
+                candidatos.append(audio[-paso:] if len(audio) >= paso else trozo)
     if filtrar_silencio or os.environ.get("ESTAVOZ_VAD") == "1":
         try:
             from aumento_acustico import DetectorVoz

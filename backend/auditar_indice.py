@@ -16,6 +16,7 @@ import json
 import sys
 from pathlib import Path
 from typing import Any
+import unicodedata
 
 import numpy as np
 
@@ -136,12 +137,20 @@ def auditar_datos_web(
         for i in orden_hubs
     ]
 
-    # 4. Distribución de cobertura de trozos por actor
-    actores_pocos_trozos = [
-        {"actor": slugs[i], "nombre": nombres[slugs[i]], "num_trozos": int(n_trozos_actor[i])}
-        for i in range(nA)
-        if n_trozos_actor[i] <= 4
-    ]
+    # 4. Distribución de cobertura de trozos por actor (priorizando dobladores con más trabajos)
+    actores_pocos_trozos = sorted(
+        [
+            {
+                "actor": slugs[i],
+                "nombre": nombres[slugs[i]],
+                "num_trozos": int(n_trozos_actor[i]),
+                "num_trabajos": int(actores[i].get("num_trabajos") or len(actores[i].get("trabajos") or [])),
+            }
+            for i in range(nA)
+            if n_trozos_actor[i] <= 4
+        ],
+        key=lambda d: (d["num_trozos"], -d["num_trabajos"], d["actor"]),
+    )
 
     return {
         "resumen": {
@@ -161,12 +170,98 @@ def auditar_datos_web(
     }
 
 
+_NOMBRES_FEM_INEQUIVOCOS = frozenset({
+    "alba", "alicia", "amparo", "ana", "angela", "antonia", "araceli", "ascension", "aurora",
+    "azucena", "beatriz", "begona", "belen", "blanca", "camila", "carla", "carmen", "carolina",
+    "catalina", "cecilia", "celia", "clara", "claudia", "concepcion", "concha", "consuelo",
+    "coral", "covadonga", "cristina", "daniela", "diana", "dolores", "elena", "elisa", "elvira",
+    "emilia", "encarna", "esther", "estrella", "eugenia", "eva", "fatima", "francisca", "gema",
+    "gloria", "graciela", "guadalupe", "helena", "ines", "irene", "isabel", "juana", "julia",
+    "laura", "leticia", "lidia", "lorena", "lourdes", "lucia", "luisa", "luz", "magdalena",
+    "maite", "manuela", "margarita", "maria", "marina", "marisol", "marta", "matilde", "mayte",
+    "mercedes", "milagros", "miriam", "monica", "montserrat", "natalia", "nerea", "nieves",
+    "noelia", "noemi", "nuria", "olga", "paloma", "patricia", "paula", "paz", "pepa", "pilar",
+    "purificacion", "raquel", "rebeca", "remedios", "rocio", "rosa", "rosario", "ruth",
+    "salome", "sandra", "sara", "silvia", "soledad", "sonia", "susana", "tamara", "teresa",
+    "trinidad", "vanesa", "vanessa", "veronica", "victoria", "virginia", "yolanda",
+})
+
+_NOMBRES_MASC_INEQUIVOCOS = frozenset({
+    "alberto", "alejandro", "alfonso", "alfredo", "alonso", "alvaro", "andres", "angel",
+    "antonio", "arturo", "benjamin", "carlos", "cesar", "claudio", "constantino", "cristobal",
+    "daniel", "david", "diego", "eduardo", "emilio", "enrique", "ernesto", "esteban",
+    "eugenio", "federico", "felipe", "felix", "fernando", "francisco", "gabriel", "gerardo",
+    "german", "gonzalo", "guillermo", "gustavo", "hector", "hugo", "ignacio", "iker", "isaac",
+    "ismael", "ivan", "jacinto", "jacob", "jaime", "javier", "jesus", "joaquin", "jordi",
+    "jorge", "jose", "juan", "julian", "julio", "leandro", "leonardo", "lorenzo", "lucas",
+    "luis", "manolo", "manuel", "marc", "marcos", "mariano", "mario", "martin", "mateo",
+    "matias", "mauricio", "miguel", "nicolas", "oscar", "pablo", "paco", "patricio", "pedro",
+    "pepe", "rafael", "ramon", "raul", "ricardo", "roberto", "rodrigo", "ruben", "salvador",
+    "samuel", "santiago", "sebastian", "sergio", "simon", "tomas", "vicente", "victor", "xavier",
+})
+
+
+def _primer_nombre_norm(nombre: str) -> str:
+    s = unicodedata.normalize("NFKD", nombre or "")
+    s = "".join(c for c in s if not unicodedata.combining(c)).lower().strip()
+    return s.split()[0] if s else ""
+
+
+def hidratar_f0_catalogo_web(carpeta_datos: str | Path = RAIZ / "frontend" / "datos") -> dict[str, int]:
+    """Hidrata `f0` aproximado por registro vocal en `actores.json` usando el eje LDA grave/agudo."""
+    carpeta = Path(carpeta_datos)
+    ruta_meta = carpeta / "actores.json"
+    meta = json.loads(ruta_meta.read_text(encoding="utf-8"))
+    actores = meta["actores"]
+    dim = int(meta["dim"])
+    nA = len(actores)
+    C = normaliza(np.fromfile(carpeta / "centroides.bin", dtype="<f4").reshape(nA, dim).astype(np.float32))
+
+    nombres_pila = [_primer_nombre_norm(a.get("nombre", "")) for a in actores]
+    idx_fem = [i for i, nom in enumerate(nombres_pila) if nom in _NOMBRES_FEM_INEQUIVOCOS]
+    idx_masc = [i for i, nom in enumerate(nombres_pila) if nom in _NOMBRES_MASC_INEQUIVOCOS]
+    if not idx_fem or not idx_masc:
+        return {"total": nA, "graves": 0, "agudos": 0, "conservados": nA, "sin_cambio": nA}
+
+    w_reg = normaliza(C[idx_fem].mean(axis=0) - C[idx_masc].mean(axis=0))
+    proy = C @ w_reg
+    mu_z = float(proy.mean())
+    sd_z = max(float(proy.std()), 1e-6)
+    z = (proy - mu_z) / sd_z
+
+    graves = agudos = conservados = sin_cambio = 0
+    for i, a in enumerate(actores):
+        if a.get("f0") is not None:
+            conservados += 1
+            continue
+        nom = nombres_pila[i]
+        if float(z[i]) <= -0.65 and nom not in _NOMBRES_FEM_INEQUIVOCOS:
+            a["f0"] = 105.0
+            graves += 1
+        elif float(z[i]) >= 0.65 and nom not in _NOMBRES_MASC_INEQUIVOCOS:
+            a["f0"] = 225.0
+            agudos += 1
+        else:
+            sin_cambio += 1
+
+    ruta_meta.write_text(json.dumps(meta, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    return {"total": nA, "graves": graves, "agudos": agudos, "conservados": conservados, "sin_cambio": sin_cambio}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Auditoría de calidad del índice de voces de EstaVoz")
     parser.add_argument("--datos-web", type=Path, default=RAIZ / "frontend" / "datos")
     parser.add_argument("--umbral-outlier", type=float, default=0.10)
     parser.add_argument("--salida", type=Path, default=None)
+    parser.add_argument("--hidratar-f0", action="store_true", help="Hidrata `f0` por registro vocal en actores.json")
     args = parser.parse_args(argv)
+
+    if args.hidratar_f0:
+        res_f0 = hidratar_f0_catalogo_web(args.datos_web)
+        print(
+            f"F0 hidratado ({res_f0['total']} actores): graves={res_f0['graves']} | "
+            f"agudos={res_f0['agudos']} | conservados={res_f0['conservados']} | medios/neutros={res_f0['sin_cambio']}"
+        )
 
     informe = auditar_datos_web(args.datos_web, umbral_outlier=args.umbral_outlier)
     res = informe["resumen"]

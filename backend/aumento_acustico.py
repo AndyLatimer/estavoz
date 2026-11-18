@@ -87,31 +87,41 @@ class DetectorVoz:
                 mensaje_diagnostico="Audio demasiado corto para analizar.",
             )
 
-        # 1. Extracción de tramas
+        # 1. Extracción vectorizada de tramas: energía RMS, ZCR y concentración en banda vocal (110 - 3500 Hz)
         n_tramas = 1 + max(0, (n_muestras - self.tamano_trama) // self.paso_trama)
-        energias = np.zeros(n_tramas, dtype=np.float32)
-        zcrs = np.zeros(n_tramas, dtype=np.float32)
-
-        # Ventana Hamming para atenuar fugas espectrales
         ventana = np.hamming(self.tamano_trama).astype(np.float32)
 
-        for i in range(n_tramas):
-            ini = i * self.paso_trama
-            fin = ini + self.tamano_trama
-            trama = audio[ini:fin] * ventana
-            rms = math.sqrt(float(np.mean(trama * trama)) + 1e-12)
-            energias[i] = rms
-            # Tasa de cruces por cero (Zero Crossing Rate)
-            cruces = np.sum(np.abs(np.diff(np.signbit(audio[ini:fin]))))
-            zcrs[i] = cruces / float(self.tamano_trama)
+        idx = np.arange(self.tamano_trama)[None, :] + (np.arange(n_tramas)[:, None] * self.paso_trama)
+        tramas_brutas = audio[idx]
+        tramas_vent = tramas_brutas * ventana[None, :]
+
+        energias = np.sqrt(np.mean(tramas_vent * tramas_vent, axis=1) + 1e-12).astype(np.float32)
+        zcrs = (np.sum(np.abs(np.diff(np.signbit(tramas_brutas), axis=1)), axis=1) / float(self.tamano_trama)).astype(np.float32)
+
+        freqs = np.fft.rfftfreq(self.tamano_trama, d=1.0 / float(self.sr))
+        mask_vocal = (freqs >= 110.0) & (freqs <= 3500.0)
+        potencia = np.abs(np.fft.rfft(tramas_vent, axis=1)) ** 2
+        pot_total = np.maximum(potencia.sum(axis=1), 1e-12)
+        ratio_vocal = (potencia[:, mask_vocal].sum(axis=1) / pot_total).astype(np.float32)
 
         energias_db = 20.0 * np.log10(np.maximum(energias, 1e-6))
-        # Estimación de suelo de ruido: percentil 15 de la energía
-        ruido_fondo_db = float(np.percentile(energias_db, 15))
+        # Estimación de suelo de ruido con protección ante locuciones continuas sin pausas
+        p10_db = float(np.percentile(energias_db, 10))
+        p50_db = float(np.percentile(energias_db, 50))
+        p90_db = float(np.percentile(energias_db, 90))
+        med_vocal = float(np.median(ratio_vocal))
+        med_zcr = float(np.median(zcrs))
+        es_voz_continua = (p90_db - p10_db) < 12.0 and p50_db >= -34.0 and med_vocal >= 0.55 and 0.005 <= med_zcr <= 0.42
+        ruido_fondo_db = min(p10_db, -34.0) if es_voz_continua else p10_db
         umbral_activacion_db = max(ruido_fondo_db + self.umbral_db, -48.0)
 
-        # 2. Clasificación binaria por trama (energía superior al suelo y ZCR no extremo)
-        activas = (energias_db >= umbral_activacion_db) & (zcrs <= 0.45) & (zcrs >= 0.01)
+        # 2. Clasificación binaria por trama (energía superior al suelo, ZCR vocal y banda 110-3500 Hz)
+        activas = (
+            (energias_db >= umbral_activacion_db)
+            & (zcrs <= 0.45)
+            & (zcrs >= 0.005)
+            & (ratio_vocal >= 0.45)
+        )
 
         # 3. Suavizado morfológico: relleno de micro-pausas (< 200 ms) y eliminación de clics aislados
         tramas_pausa_min = int(0.200 * self.sr / self.paso_trama)
@@ -377,12 +387,21 @@ def simular_sala_tv(
 
 
 def normalizar_amplitud_pico(audio: np.ndarray, pico_objetivo: float = 0.75) -> np.ndarray:
-    """Normaliza la amplitud pico del audio a un nivel nominal (-2.5 dB) para consistencia en inferencia."""
+    """Normaliza la amplitud pico a nivel nominal (-2.5 dB) protegiendo frente a picos impulsivos aislados."""
     audio = np.asarray(audio, dtype=np.float32)
-    pico = float(np.max(np.abs(audio))) if len(audio) else 0.0
+    if len(audio) == 0:
+        return audio
+    abs_a = np.abs(audio)
+    pico = float(np.max(abs_a))
     if pico < 1e-5:
         return audio
-    factor = pico_objetivo / pico
+    p98 = float(np.percentile(abs_a, 98)) if len(audio) >= 100 else pico
+    if p98 > 1e-5 and pico > 3.0 * p98:
+        # El exceso por encima de 2 * p98 se comprime con tanh para que un golpe puntual no hunda la ganancia vocal
+        escala_base = 2.0 * p98
+        audio = (escala_base * np.tanh(audio / escala_base)).astype(np.float32)
+        pico = float(np.max(np.abs(audio)))
+    factor = pico_objetivo / max(pico, 1e-5)
     return (audio * factor).astype(np.float32)
 
 
@@ -453,4 +472,60 @@ def clasificar_registro_vocal(f0_hz: float | None) -> str:
     if f0_hz > 175.0:
         return "agudo"
     return "medio"
+
+
+def realzar_voz_lejana_y_atenuar_fondo(audio: np.ndarray, sr: int = 16000) -> np.ndarray:
+    """Compensa la caída de agudos por lejanía al televisor (Spectral Tilt) y atenúa ruido/música entre sílabas."""
+    audio = np.asarray(audio, dtype=np.float32)
+    n = len(audio)
+    if n < int(sr * 0.10):
+        return audio
+
+    energia_total = float(np.dot(audio, audio))
+    if energia_total < 1e-10:
+        return audio
+
+    out = audio.copy()
+    # 1. Pre-énfasis adaptativo si la señal presenta exceso de graves/caída de agudos (r1 > 0.82)
+    r1 = float(np.dot(out[1:], out[:-1]) / (energia_total + 1e-12))
+    if r1 > 0.82:
+        alfa = min(0.35, max(0.0, (r1 - 0.80) * 1.4))
+        pre = np.empty_like(out)
+        pre[0] = out[0]
+        pre[1:] = out[1:] - alfa * out[:-1]
+        rms_in = math.sqrt(energia_total / n + 1e-12)
+        rms_pre = math.sqrt(float(np.mean(pre * pre)) + 1e-12)
+        out = (pre * (rms_in / max(rms_pre, 1e-8))).astype(np.float32)
+
+    # 2. Puerta espectral suave en tramas de 20 ms para atenuar fondo estacionario entre palabras
+    tam = int(sr * 0.020)
+    n_tramas = n // tam
+    if n_tramas >= 6:
+        bloques = out[: n_tramas * tam].reshape(n_tramas, tam)
+        rms_t = np.sqrt(np.mean(bloques * bloques, axis=1) + 1e-12)
+        Vent = np.hanning(tam).astype(np.float32)
+        espectro = np.abs(np.fft.rfft(bloques * Vent[None, :], axis=1)) ** 2
+        freqs = np.fft.rfftfreq(tam, d=1.0 / sr)
+        mask_voc = (freqs >= 110.0) & (freqs <= 3500.0)
+        e_tot = np.sum(espectro[:, 1:], axis=1) + 1e-12
+        ratio_voc = np.sum(espectro[:, mask_voc], axis=1) / e_tot
+
+        p15_rms = float(np.percentile(rms_t, 15))
+        ganancias = np.ones(n_tramas, dtype=np.float32)
+        for k in range(n_tramas):
+            if rms_t[k] < 1.5 * p15_rms and ratio_voc[k] < 0.38:
+                ganancias[k] = 0.35
+            elif ratio_voc[k] < 0.25:
+                ganancias[k] = 0.55
+        # Suavizado temporal de ganancias para evitar modulación brusca
+        if n_tramas >= 3:
+            ganancias = np.convolve(ganancias, [0.25, 0.50, 0.25], mode="same").astype(np.float32)
+            ganancias[0] = max(ganancias[0], 0.5)
+            ganancias[-1] = max(ganancias[-1], 0.5)
+        centros = (np.arange(n_tramas, dtype=np.float32) + 0.5) * tam
+        env = np.interp(np.arange(n, dtype=np.float32), centros, ganancias).astype(np.float32)
+        out = (out * env).astype(np.float32)
+
+    return out
+
 
