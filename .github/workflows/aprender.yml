@@ -38,7 +38,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          python despliegue/copia_datos.py "${{ vars.HF_DATOS }}" bajar
+          python despliegue/copia_datos.py "${{ vars.HF_DATOS }}" bajar-web
           python -c "from huggingface_hub import hf_hub_download as d; import os, shutil; os.makedirs('frontend/modelo', exist_ok=True); shutil.copy(d('${{ vars.HF_SPACE }}', 'modelo/voxblink-int8.onnx', repo_type='space', token=os.environ['HF_TOKEN']), 'frontend/modelo/voxblink-int8.onnx')"
 
       - name: Recoger respuestas

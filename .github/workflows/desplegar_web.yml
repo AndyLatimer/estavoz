@@ -1,0 +1,50 @@
+# Publicación rápida de la web en Hugging Face Spaces (~2 minutos):
+# descarga solo `indice.npz`, `fichas.json`, fotos y trabajos (sin audios), recoge respuestas de Supabase,
+# reexporta el catálogo web (con LDA reg=1.25 y F0), pasa los tests y sube `frontend/`.
+
+name: Desplegar web en Hugging Face
+
+on:
+  workflow_dispatch:
+
+jobs:
+  desplegar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias
+        run: pip install numpy scipy requests huggingface_hub onnxruntime soundfile pytest fastapi httpx python-multipart onnx
+
+      - name: Verificar frontend y módulos antes de construir
+        run: pytest -q --ignore=tests/test_app.py
+
+      - name: Bajar datos mínimos para web y modelo
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python despliegue/copia_datos.py "${{ vars.HF_DATOS }}" bajar-web
+          python -c "from huggingface_hub import hf_hub_download as d; import os, shutil; os.makedirs('frontend/modelo', exist_ok=True); shutil.copy(d('${{ vars.HF_SPACE }}', 'modelo/voxblink-int8.onnx', repo_type='space', token=os.environ['HF_TOKEN']), 'frontend/modelo/voxblink-int8.onnx')"
+
+      - name: Recoger respuestas de Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python backend/aprender.py
+
+      - name: Reexportar datos web y validar todo
+        env:
+          ESTAVOZ_ONNX: frontend/modelo/voxblink-int8.onnx
+        run: |
+          python despliegue/exportar_web.py
+          pytest -q tests/test_app.py tests/test_rechazo.py tests/test_frontend.py tests/test_metadatos_modelo.py
+
+      - name: Publicar en Hugging Face Spaces
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: python despliegue/subir_a_huggingface.py "${{ vars.HF_SPACE }}"
