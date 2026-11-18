@@ -10,13 +10,13 @@ on:
   workflow_dispatch:
     inputs:
       max_refuerzo:
-        description: "Máximo de actores existentes a reforzar por fuente"
+        description: "Máximo de actores existentes a reforzar desde podcasts/eldoblaje en esta tanda"
         required: false
-        default: "120"
+        default: "55"
       max_nuevos:
-        description: "Máximo de dobladores nuevos por fuente"
+        description: "Máximo de dobladores nuevos a incorporar en esta tanda"
         required: false
-        default: "80"
+        default: "45"
 
 jobs:
   ampliar:
@@ -60,7 +60,7 @@ jobs:
           ESTAVOZ_ONNX: frontend/modelo/voxblink-int8.onnx
         run: |
           python despliegue/exportar_web.py
-          python backend/incorporar_voces.py --todo --max-refuerzo "${{ inputs.max_refuerzo || '120' }}" --max-nuevos "${{ inputs.max_nuevos || '80' }}"
+          python backend/incorporar_voces.py --podar --eldoblaje --podcasts --max-refuerzo "${{ inputs.max_refuerzo || '55' }}" --max-nuevos "${{ inputs.max_nuevos || '45' }}"
 
       - name: Persistir ampliaciones en dataset privado y reexportar con LDA completo
         env:

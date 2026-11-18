@@ -115,6 +115,27 @@ ACTORES_REFORZAR_PRIORITARIOS = {
     "102450-nerea-alfonso",
     "106383-vera-bosch",
 }
+_ACTORES_PRIORIDAD_MAXIMA = {
+    "177-luis-posada",
+    "98-camilo-garcia",
+    "108-jose-luis-gil",
+    "174-jordi-pons",
+    "137-lluis-marco",
+    "58-roberto-cuenca-martinez",
+    "68-carlos-del-pino",
+    "249-julia-gallego",
+    "102-manolo-garcia",
+    "334-carlos-revilla",
+    "288-nuria-trifol",
+    "119-david-jenner",
+    "152-pedro-molina",
+    "267-mercedes-montala",
+    "227-sergio-zamora",
+    "113-juan-carlos-gustems",
+    "213-alberto-trifol",
+    "610-maria-jesus-lleonart",
+    "73-rafael-calvo",
+}
 
 FEEDS_PODCAST: dict[str, dict[str, Any]] = {
     "La Vermella": {
@@ -779,7 +800,13 @@ def incorporar_desde_eldoblaje(
     return {"reforzados_eldoblaje": reforzados, "nuevos_eldoblaje": agregados}
 
 
-def _descargar_turnos_podcast(mp3_url: str, skip_seg: int = 60, max_seg: int = 720, max_bytes: int = 12 << 20) -> list[np.ndarray]:
+def _descargar_turnos_podcast(
+    mp3_url: str,
+    skip_seg: int = 60,
+    max_seg: int = 300,
+    max_bytes: int = 8 << 20,
+    max_turnos: int = 14,
+) -> list[np.ndarray]:
     datos = _descargar_bytes(mp3_url, max_bytes=max_bytes, timeout=30)
     if not datos:
         return []
@@ -796,11 +823,18 @@ def _descargar_turnos_podcast(mp3_url: str, skip_seg: int = 60, max_seg: int = 7
             audio = cargar_audio_bytes(datos_full, max_seg=max_seg + skip_seg)
         except Exception:
             return []
-    if skip_seg and len(audio) > (skip_seg + 40) * SAMPLE_RATE:
+    if skip_seg and len(audio) > (skip_seg + 35) * SAMPLE_RATE:
         audio = audio[skip_seg * SAMPLE_RATE :]
     vad = DetectorVoz(sr=SAMPLE_RATE, min_voz_util_seg=1.5).analizar(audio)
-    turnos = segmentar_intervenciones(audio, vad=vad, sr=SAMPLE_RATE, min_duracion_turno_seg=3.0, max_duracion_turno_seg=7.0)
-    return [t for t in turnos if len(t) >= 3 * SAMPLE_RATE][:28]
+    turnos = segmentar_intervenciones(audio, vad=vad, sr=SAMPLE_RATE, min_duracion_turno_seg=3.0, max_duracion_turno_seg=6.0)
+    return [t for t in turnos if len(t) >= 3 * SAMPLE_RATE][:max_turnos]
+
+
+def _emb_cluster_turnos(turnos: list[np.ndarray], mu: np.ndarray, W: np.ndarray) -> np.ndarray:
+    """Proyecta los turnos recortados a <= 3,5 s para acelerar ~4x el agrupamiento por locutor."""
+    max_muestras = int(3.5 * SAMPLE_RATE)
+    embs = np.stack([normaliza(huella_trozo(t[:max_muestras])) for t in turnos])
+    return proyectar(embs, mu, W)
 
 
 def _identificar_hosts_podcast(
@@ -808,7 +842,7 @@ def _identificar_hosts_podcast(
     episodios: list[dict[str, Any]],
     estado: dict[str, Any],
     por_nombre: dict[str, int],
-    max_ejemplos: int = 5,
+    max_ejemplos: int = 4,
 ) -> list[np.ndarray]:
     """Construye los centroides de los presentadores habituales de un programa usando episodios de conocidos."""
     mu, W, C = estado["mu"], estado["W"], estado["C"]
@@ -825,12 +859,13 @@ def _identificar_hosts_podcast(
                 break
         if idx_conocido is None:
             continue
-        turnos = _descargar_turnos_podcast(ep["mp3"], skip_seg=ep["skip_seg"], max_seg=360, max_bytes=7 << 20)
-        if len(turnos) < 6:
+        turnos = _descargar_turnos_podcast(
+            ep["mp3"], skip_seg=ep["skip_seg"], max_seg=180, max_bytes=5 << 20, max_turnos=10,
+        )
+        if len(turnos) < 5:
             continue
         probados += 1
-        embs = np.stack([normaliza(huella_trozo(t)) for t in turnos])
-        projs = proyectar(embs, mu, W)
+        projs = _emb_cluster_turnos(turnos, mu, W)
         labels = fcluster(linkage(projs, method="average", metric="cosine"), t=0.52, criterion="distance")
         for lbl in set(labels):
             ix = np.flatnonzero(labels == lbl)
@@ -849,6 +884,7 @@ def _identificar_hosts_podcast(
         ix = np.flatnonzero(labels_h == lbl)
         if len(ix) >= 2:  # aparece repetidamente en >= 2 episodios distintos -> es presentador
             hosts.append(normaliza(H[ix].mean(0)).astype(np.float32))
+    print(f"  [host] {prog}: {len(hosts)} presentador(es) detectado(s) ({len(candidatos_host)} muestras)", flush=True)
     return hosts
 
 
@@ -1015,8 +1051,8 @@ def incorporar_desde_podcasts(
             })
         episodios_por_prog[prog] = lista
 
-    # 2. Reforzar actores existentes (con <= umbral_trozos_refuerzo, prioritarios, o seleccionados explícitamente)
-    tareas_refuerzo: list[tuple[int, int, int, int, dict[str, Any]]] = []
+    # 2. Reforzar actores existentes (máxima prioridad -> prioritarios/bajo conteo -> seleccionados explícitamente)
+    tareas_refuerzo: list[tuple[int, int, int, int, dict[str, Any], bool]] = []
     vistos_refuerzo: set[tuple[int, str]] = set()
     for prog, eps in episodios_por_prog.items():
         for ep in eps:
@@ -1027,27 +1063,30 @@ def incorporar_desde_podcasts(
                 actor_obj = estado["actores"][idx]
                 actor_id = actor_obj["id"]
                 n_troz = len(estado["trozos_por_actor"][idx])
+                es_max = actor_id in _ACTORES_PRIORIDAD_MAXIMA
                 es_prio = actor_id in ACTORES_REFORZAR_PRIORITARIOS
                 es_obj = (
                     (actor_id in objetivos_filtro or nom in objetivos_filtro)
                     if objetivos_filtro is not None
-                    else (n_troz <= umbral_trozos_refuerzo or es_prio)
+                    else (n_troz <= umbral_trozos_refuerzo or es_prio or es_max)
                 )
                 if f" {nom} " in tp and es_obj:
                     clave = f"pod:{hashlib.sha1(ep['mp3'].encode()).hexdigest()[:12]}:{actor_id}"
                     if clave not in hechos_pod:
                         vistos_refuerzo.add((idx, ep["mp3"]))
                         n_trab = int(actor_obj.get("num_trabajos") or len(actor_obj.get("trabajos") or []))
-                        tareas_refuerzo.append((0 if es_prio else 1, n_troz, -n_trab, idx, ep))
+                        nivel = 0 if es_max else (1 if es_prio else 2)
+                        es_solo = _es_entrevista_solitaria(ep["titulo"], nom)
+                        tareas_refuerzo.append((nivel, n_troz, -n_trab, idx, ep, es_solo))
 
     tareas_refuerzo.sort(key=lambda x: (x[0], x[1], x[2]))
     reforzados = 0
-    for _prio, _cnt, _neg_trab, idx, ep in tareas_refuerzo[:max_reforzar]:
+    for _nivel, _cnt, _neg_trab, idx, ep, es_solo in tareas_refuerzo[:max_reforzar]:
         a = estado["actores"][idx]
         clave = f"pod:{hashlib.sha1(ep['mp3'].encode()).hexdigest()[:12]}:{a['id']}"
         if clave in hechos_pod:
             continue
-        techo_trozos = 36
+        techo_trozos = 54 if a["id"] in _ACTORES_PRIORIDAD_MAXIMA else 36
         if objetivos_filtro is None and len(estado["trozos_por_actor"][idx]) >= techo_trozos:
             hechos_pod.add(clave)
             continue
@@ -1055,18 +1094,20 @@ def incorporar_desde_podcasts(
         if prog not in hosts_cache:
             hosts_cache[prog] = _identificar_hosts_podcast(prog, episodios_por_prog[prog], estado, por_nombre)
             reg["hosts_podcast"][prog] = [h.tolist() for h in hosts_cache[prog]]
+            _guardar_registro(reg)
 
-        turnos = _descargar_turnos_podcast(ep["mp3"], skip_seg=ep["skip_seg"], max_seg=540, max_bytes=14 << 20)
+        turnos = _descargar_turnos_podcast(ep["mp3"], skip_seg=ep["skip_seg"], max_seg=300, max_bytes=8 << 20)
         hechos_pod.add(clave)
         if len(turnos) < 5:
+            print(f"  [podcast skip] {a['id']} ({prog}): turnos={len(turnos)}", flush=True)
             continue
-        embs = np.stack([normaliza(huella_trozo(t)) for t in turnos])
-        projs = proyectar(embs, mu, W)
+        projs = _emb_cluster_turnos(turnos, mu, W)
         labels = fcluster(linkage(projs, method="average", metric="cosine"), t=0.52, criterion="distance")
         C_norm = normaliza(estado["C"])
         hosts = hosts_cache.get(prog, [])
 
         mejor_cluster = None
+        mejor_dbg = ""
         for lbl in set(labels):
             ix = np.flatnonzero(labels == lbl)
             if len(ix) < 3:
@@ -1078,15 +1119,29 @@ def incorporar_desde_podcasts(
             sims_todos = (projs[ix] @ C_norm.T).mean(axis=0)
             sim_propio = float(sims_todos[idx])
             puesto = int((sims_todos > sim_propio).sum()) + 1
-            if puesto <= 3 and sim_propio >= 0.30 and (sim_propio - sim_host) >= 0.06:
-                cand = (sim_propio, ix)
-                if mejor_cluster is None or cand[0] > mejor_cluster[0]:
-                    mejor_cluster = cand
+            intra = float((projs[ix] @ centro_c).mean())
+            max_ajeno = float(np.delete(sims_todos, idx).max()) if len(sims_todos) > 1 else 0.0
+            es_directo = puesto <= 3 and sim_propio >= 0.30 and (sim_propio - sim_host) >= 0.06
+            es_solo_dominante = (
+                es_solo
+                and len(hosts) >= 1
+                and sim_host < 0.28
+                and len(ix) >= max(6, len(turnos) // 2)
+                and intra >= 0.76
+                and max_ajeno < 0.50
+            )
+            if es_directo or es_solo_dominante:
+                score = sim_propio + (0.20 if es_directo else 0.0)
+                if mejor_cluster is None or score > mejor_cluster[0]:
+                    mejor_cluster = (score, sim_propio, "directo" if es_directo else "solo", ix)
+            else:
+                mejor_dbg = f"n={len(ix)},sim={sim_propio:.2f},p={puesto},host={sim_host:.2f},aj={max_ajeno:.2f}"
 
         if mejor_cluster is None:
+            print(f"  [podcast skip] {a['id']} ({prog}): {mejor_dbg or 'sin_cluster_valido'}", flush=True)
             continue
-        sim_propio, ix_sel = mejor_cluster
-        audio_sel = np.concatenate([turnos[i] for i in ix_sel])[: 72 * SAMPLE_RATE]
+        _sc, sim_propio, modo, ix_sel = mejor_cluster
+        audio_sel = np.concatenate([turnos[i] for i in ix_sel])[: 54 * SAMPLE_RATE]
         hash_ep = hashlib.sha1(ep["mp3"].encode()).hexdigest()[:10]
         clip_pod = f"podcasts/{a['id']}/voz_{hash_ep}.wav"
         sem = int(hashlib.sha1(clave.encode()).hexdigest()[:8], 16)
@@ -1103,7 +1158,7 @@ def incorporar_desde_podcasts(
         ).astype(np.float32)
         _registrar_ampliacion(amp, a["id"], crudos_nuevos, cids_pod, actor_obj=a)
         reforzados += 1
-        print(f"  [podcast+] {a['id']} ({prog}, sim={sim_propio:.3f}, +{len(vecs_nuevos)} trozos)", flush=True)
+        print(f"  [podcast+] {a['id']} ({prog}, {modo}, sim={sim_propio:.3f}, +{len(vecs_nuevos)} trozos)", flush=True)
 
     # 3. Nuevos actores sin muestra previa verificados en podcasts (requiere >=2 episodios o programa solitario fiable)
     nuevos_agregados = 0
@@ -1154,11 +1209,10 @@ def incorporar_desde_podcasts(
                     hosts_cache[prog] = _identificar_hosts_podcast(prog, episodios_por_prog[prog], estado, por_nombre)
                     reg["hosts_podcast"][prog] = [h.tolist() for h in hosts_cache[prog]]
                 hosts = hosts_cache.get(prog, [])
-                turnos = _descargar_turnos_podcast(ep["mp3"], skip_seg=ep["skip_seg"], max_seg=540, max_bytes=14 << 20)
-                if len(turnos) < 6:
+                turnos = _descargar_turnos_podcast(ep["mp3"], skip_seg=ep["skip_seg"], max_seg=300, max_bytes=8 << 20)
+                if len(turnos) < 5:
                     continue
-                embs = np.stack([normaliza(huella_trozo(t)) for t in turnos])
-                projs = proyectar(embs, mu, W)
+                projs = _emb_cluster_turnos(turnos, mu, W)
                 labels = fcluster(linkage(projs, method="average", metric="cosine"), t=0.50, criterion="distance")
                 for lbl in set(labels):
                     ix = np.flatnonzero(labels == lbl)
@@ -1206,7 +1260,7 @@ def incorporar_desde_podcasts(
             if not ficha_web or len(ficha_web["trabajos_completos"]) < 10:
                 continue
 
-            audio_all = np.concatenate([c[1][i] for c in aprobados for i in c[2]])[: 90 * SAMPLE_RATE]
+            audio_all = np.concatenate([c[1][i] for c in aprobados for i in c[2]])[: 60 * SAMPLE_RATE]
             hash_nuevo = hashlib.sha1(aprobados[0][0]["mp3"].encode()).hexdigest()[:10]
             clip_pod_new = f"podcasts/{ficha_web['id']}/voz_{hash_nuevo}.wav"
             sem = int(hashlib.sha1(clave_n.encode()).hexdigest()[:8], 16)
@@ -1296,11 +1350,16 @@ def main() -> None:
     else:
         if args.todo or args.eldoblaje:
             res_e = incorporar_desde_eldoblaje(
-                estado, reg, max_bajo_conteo=args.max_refuerzo,
-                max_nuevos_buscavoces=max(args.max_nuevos, 80), amp=amp,
+                estado, reg,
+                max_bajo_conteo=min(args.max_refuerzo, 50),
+                max_nuevos_buscavoces=min(max(args.max_nuevos, 40), 60),
+                ids_nuevos_forzados=IDS_ELDOBLAJE_CURADOS,
+                amp=amp,
             )
             print("Eldoblaje:", res_e, flush=True)
             guardar_estado_web(estado)
+            if amp is not None and amp["modificado"]:
+                guardar_ampliaciones(amp, dim=int(estado["dim"]))
         if args.todo or args.podcasts:
             res_p = incorporar_desde_podcasts(
                 estado,
@@ -1312,6 +1371,8 @@ def main() -> None:
             )
             print("Podcasts:", res_p, flush=True)
             guardar_estado_web(estado)
+            if amp is not None and amp["modificado"]:
+                guardar_ampliaciones(amp, dim=int(estado["dim"]))
         if args.todo or args.hidratar:
             res_h = hidratar_filmografias_y_busqueda(estado)
             print("Filmografías:", res_h, flush=True)
