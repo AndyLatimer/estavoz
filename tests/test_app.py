@@ -171,3 +171,25 @@ def test_penalizacion_f0_graduada():
     assert _penalizacion_f0(200.0, 105.0) == 0.020
     assert _penalizacion_f0(150.0, 105.0) == 0.0
     assert _penalizacion_f0(None, 225.0) == 0.0
+
+
+def test_cargar_indice_prioriza_modo_web_frente_a_indice_npz(tmp_path: Path, monkeypatch):
+    """Aunque exista `data/indice.npz`, `cargar_indice()` debe priorizar los artefactos web con LDA y búsqueda."""
+    import shutil
+    import app as backend_app
+
+    (tmp_path / "data").mkdir(parents=True)
+    (tmp_path / "data" / "indice.npz").write_bytes(b"falso-no-usado-si-hay-web")
+    shutil.copytree(RAIZ / "frontend" / "datos", tmp_path / "frontend" / "datos", dirs_exist_ok=True)
+    if (RAIZ / "frontend" / "modelo" / "voxblink-int8.onnx").exists():
+        (tmp_path / "frontend" / "modelo").mkdir(parents=True, exist_ok=True)
+        shutil.copy(RAIZ / "frontend" / "modelo" / "voxblink-int8.onnx", tmp_path / "frontend" / "modelo" / "voxblink-int8.onnx")
+
+    monkeypatch.setattr(backend_app, "RAIZ", tmp_path)
+    try:
+        backend_app.cargar_indice()
+        assert backend_app.INDICE["modo"] == "web"
+        assert backend_app.INDICE["info_modelo"]["dim"] == 256
+    finally:
+        monkeypatch.undo()
+        backend_app.cargar_indice()

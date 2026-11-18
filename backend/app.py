@@ -41,19 +41,10 @@ INDICE: dict = {}
 
 
 def cargar_indice():
+    INDICE.clear()
     ruta_npz = RAIZ / "data" / "indice.npz"
     dir_web = RAIZ / "frontend" / "datos"
-    if ruta_npz.exists():
-        datos = np.load(ruta_npz)
-        info_mod = validar_compatibilidad_indice(datos, info_modelo=info_modelo_actual())
-        INDICE["vectores"] = datos["vectores"]
-        INDICE["etiquetas"] = datos["etiquetas"]
-        # la grabación se trata igual que se trataron los clips del índice
-        INDICE["separar"] = bool(datos["separado"]) if "separado" in datos.files else False
-        INDICE["fichas"] = json.loads((RAIZ / "data" / "fichas.json").read_text(encoding="utf-8"))
-        INDICE["info_modelo"] = info_mod
-        INDICE["modo"] = "npz"
-    elif (dir_web / "actores.json").exists() and (dir_web / "trozos.bin").exists():
+    if (dir_web / "actores.json").exists() and (dir_web / "trozos.bin").exists():
         ruta_onnx = RAIZ / "frontend" / "modelo" / "voxblink-int8.onnx"
         resumen_web = validar_artefactos_web(dir_web, ruta_onnx=ruta_onnx if ruta_onnx.exists() else None)
         meta = json.loads((dir_web / "actores.json").read_text(encoding="utf-8"))
@@ -98,6 +89,23 @@ def cargar_indice():
         else:
             INDICE["busqueda"] = []
             INDICE["busqueda_norm"] = []
+    elif ruta_npz.exists():
+        datos = np.load(ruta_npz)
+        info_mod = validar_compatibilidad_indice(datos, info_modelo=info_modelo_actual())
+        fichas = json.loads((RAIZ / "data" / "fichas.json").read_text(encoding="utf-8"))
+        INDICE["vectores"] = datos["vectores"]
+        INDICE["etiquetas"] = datos["etiquetas"]
+        # la grabación se trata igual que se trataron los clips del índice
+        INDICE["separar"] = bool(datos["separado"]) if "separado" in datos.files else False
+        INDICE["fichas"] = fichas
+        INDICE["info_modelo"] = {
+            **info_mod,
+            "dim": int(info_mod["dim_embedding"]),
+            "num_actores": len(fichas),
+            "version_modelo": info_mod["modelo_version"],
+            "variante_modelo": info_mod["modelo_variante"],
+        }
+        INDICE["modo"] = "npz"
 
 
 def normalizar_texto(t: str) -> str:
