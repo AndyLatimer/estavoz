@@ -74,7 +74,7 @@ ACTORES_REFORZAR_PRIORITARIOS = {
     "15-ruperto-ares",
     "58-roberto-cuenca-martinez",
     "68-carlos-del-pino",
-    "73-rafael-calvo",
+    "38-rafael-calvo",
     "98-camilo-garcia",
     "102-manolo-garcia",
     "108-jose-luis-gil",
@@ -134,7 +134,7 @@ _ACTORES_PRIORIDAD_MAXIMA = {
     "113-juan-carlos-gustems",
     "213-alberto-trifol",
     "610-maria-jesus-lleonart",
-    "73-rafael-calvo",
+    "38-rafael-calvo",
 }
 
 FEEDS_PODCAST: dict[str, dict[str, Any]] = {
@@ -842,25 +842,31 @@ def _identificar_hosts_podcast(
     episodios: list[dict[str, Any]],
     estado: dict[str, Any],
     por_nombre: dict[str, int],
-    max_ejemplos: int = 4,
+    max_ejemplos: int = 5,
 ) -> list[np.ndarray]:
     """Construye los centroides de los presentadores habituales de un programa usando episodios de conocidos."""
     mu, W, C = estado["mu"], estado["W"], estado["C"]
-    candidatos_host: list[np.ndarray] = []
-    probados = 0
+    candidatos_ep: list[tuple[int, dict[str, Any], int]] = []
     for ep in episodios:
-        if probados >= max_ejemplos:
-            break
+        if _es_homenaje(ep["titulo"]):
+            continue
         tp = f" {normalizar_texto(ep['titulo'])} "
-        idx_conocido = None
         for nom, i in por_nombre.items():
             if f" {nom} " in tp:
-                idx_conocido = i
+                es_solo = _es_entrevista_solitaria(ep["titulo"], nom)
+                candidatos_ep.append((0 if es_solo else 1, ep, i))
                 break
-        if idx_conocido is None:
-            continue
+    candidatos_ep.sort(key=lambda x: x[0])
+
+    candidatos_host: list[np.ndarray] = []
+    probados = 0
+    for _prio, ep, idx_conocido in candidatos_ep:
+        if probados >= max_ejemplos:
+            break
+        # Usar inicio temprano (<= 30 s) para capturar siempre la presentación del locutor (p. ej. La Vermella)
+        skip_host = min(int(ep["skip_seg"]), 30)
         turnos = _descargar_turnos_podcast(
-            ep["mp3"], skip_seg=ep["skip_seg"], max_seg=180, max_bytes=5 << 20, max_turnos=10,
+            ep["mp3"], skip_seg=skip_host, max_seg=210, max_bytes=6 << 20, max_turnos=12,
         )
         if len(turnos) < 5:
             continue
@@ -969,6 +975,16 @@ def _claves_nombre_actor(nombre: str) -> list[str]:
     return claves
 
 
+def _es_homenaje(titulo: str) -> bool:
+    """Detecta episodios homenaje o especiales póstumos donde hablan compañeros en lugar del actor citado."""
+    tp = normalizar_texto(titulo)
+    if re.search(r"\b(homenaje|homenatge|in memoriam|tributo)\b", tp):
+        return True
+    if re.search(r"\bespecial\b", tp) and not re.search(r"\b(con|amb|entrevista|charleta)\b", tp):
+        return True
+    return False
+
+
 def _es_entrevista_solitaria(titulo: str, nombre_norm: str) -> bool:
     """Detecta si `titulo` presenta a un único invitado alrededor de `nombre_norm` (admite `con <Nombre>`)."""
     tp = normalizar_texto(titulo)
@@ -1014,6 +1030,7 @@ def incorporar_desde_podcasts(
     objetivos_filtro: set[str] | None = None,
     umbral_trozos_refuerzo: int = 18,
     amp: dict[str, Any] | None = None,
+    reintentar_sin_acierto: bool = False,
 ) -> dict[str, int]:
     """Extrae fragmentos verificados de podcasts para actores con pocos trozos, prioritarios y nuevos referentes."""
     mu, W = estado["mu"], estado["W"]
@@ -1023,10 +1040,38 @@ def incorporar_desde_podcasts(
             por_nombre.setdefault(clave, i)
 
     hechos_pod = set(reg["podcasts_hechos"])
+    if reintentar_sin_acierto:
+        pares_amp = amp["pares_existentes"] if amp is not None else set()
+        conservados_pod: set[str] = set()
+        for cl in hechos_pod:
+            if cl.startswith("pod_nuevo:"):
+                nom_c = cl.split(":", 1)[1]
+                if any(k in por_nombre for k in _claves_nombre_actor(nom_c)):
+                    conservados_pod.add(cl)
+            elif cl.startswith("pod:"):
+                partes_cl = cl.split(":", 2)
+                if len(partes_cl) == 3:
+                    h10, aid_c = partes_cl[1][:10], partes_cl[2]
+                    if any(s == aid_c and c.startswith(f"podcasts/{aid_c}/voz_{h10}") for s, c in pares_amp):
+                        conservados_pod.add(cl)
+            else:
+                conservados_pod.add(cl)
+        print(f"  [reintento] Liberados {len(hechos_pod) - len(conservados_pod)} intentos previos sin captura", flush=True)
+        hechos_pod = conservados_pod
+
     hosts_cache: dict[str, list[np.ndarray]] = {
         k: [np.array(v, dtype=np.float32) for v in vs]
         for k, vs in reg.get("hosts_podcast", {}).items()
     }
+    hosts_recalculados: set[str] = set()
+
+    def _obtener_hosts(prog_nom: str) -> list[np.ndarray]:
+        if prog_nom not in hosts_cache or (not hosts_cache[prog_nom] and prog_nom not in hosts_recalculados):
+            hosts_recalculados.add(prog_nom)
+            hosts_cache[prog_nom] = _identificar_hosts_podcast(prog_nom, episodios_por_prog[prog_nom], estado, por_nombre)
+            reg["hosts_podcast"][prog_nom] = [h.tolist() for h in hosts_cache[prog_nom]]
+            _guardar_registro(reg)
+        return hosts_cache.get(prog_nom, [])
 
     # 1. Leer feeds RSS de programas verificados
     episodios_por_prog: dict[str, list[dict[str, Any]]] = {}
@@ -1056,6 +1101,8 @@ def incorporar_desde_podcasts(
     vistos_refuerzo: set[tuple[int, str]] = set()
     for prog, eps in episodios_por_prog.items():
         for ep in eps:
+            if _es_homenaje(ep["titulo"]):
+                continue
             tp = f" {normalizar_texto(ep['titulo'])} "
             for nom, idx in por_nombre.items():
                 if (idx, ep["mp3"]) in vistos_refuerzo:
@@ -1091,10 +1138,7 @@ def incorporar_desde_podcasts(
             hechos_pod.add(clave)
             continue
         prog = ep["programa"]
-        if prog not in hosts_cache:
-            hosts_cache[prog] = _identificar_hosts_podcast(prog, episodios_por_prog[prog], estado, por_nombre)
-            reg["hosts_podcast"][prog] = [h.tolist() for h in hosts_cache[prog]]
-            _guardar_registro(reg)
+        hosts = _obtener_hosts(prog)
 
         turnos = _descargar_turnos_podcast(ep["mp3"], skip_seg=ep["skip_seg"], max_seg=300, max_bytes=8 << 20)
         hechos_pod.add(clave)
@@ -1104,7 +1148,7 @@ def incorporar_desde_podcasts(
         projs = _emb_cluster_turnos(turnos, mu, W)
         labels = fcluster(linkage(projs, method="average", metric="cosine"), t=0.52, criterion="distance")
         C_norm = normaliza(estado["C"])
-        hosts = hosts_cache.get(prog, [])
+        f0_actor = a.get("f0")
 
         mejor_cluster = None
         mejor_dbg = ""
@@ -1121,20 +1165,28 @@ def incorporar_desde_podcasts(
             puesto = int((sims_todos > sim_propio).sum()) + 1
             intra = float((projs[ix] @ centro_c).mean())
             max_ajeno = float(np.delete(sims_todos, idx).max()) if len(sims_todos) > 1 else 0.0
-            es_directo = puesto <= 3 and sim_propio >= 0.30 and (sim_propio - sim_host) >= 0.06
+            es_directo = (
+                (puesto <= 3 and sim_propio >= 0.30 and (sim_propio - sim_host) >= 0.06)
+                or (es_solo and puesto <= 8 and sim_propio >= 0.30 and (sim_propio - sim_host) >= 0.08)
+            )
             es_solo_dominante = (
                 es_solo
                 and len(hosts) >= 1
                 and sim_host < 0.28
-                and len(ix) >= max(6, len(turnos) // 2)
+                and len(ix) >= max(5, len(turnos) // 2)
                 and intra >= 0.76
                 and max_ajeno < 0.50
             )
+            if es_solo_dominante and not es_directo and f0_actor is not None:
+                f0_cl = estimar_f0_mediana(np.concatenate([turnos[i] for i in ix[:5]]))
+                if f0_cl is not None and 60.0 <= f0_cl <= 380.0 and abs(float(f0_cl) - float(f0_actor)) > 65.0:
+                    es_solo_dominante = False
+                    mejor_dbg = f"f0_mismatch({f0_cl:.0f}vs{float(f0_actor):.0f})"
             if es_directo or es_solo_dominante:
                 score = sim_propio + (0.20 if es_directo else 0.0)
                 if mejor_cluster is None or score > mejor_cluster[0]:
                     mejor_cluster = (score, sim_propio, "directo" if es_directo else "solo", ix)
-            else:
+            elif not mejor_dbg:
                 mejor_dbg = f"n={len(ix)},sim={sim_propio:.2f},p={puesto},host={sim_host:.2f},aj={max_ajeno:.2f}"
 
         if mejor_cluster is None:
@@ -1171,7 +1223,7 @@ def incorporar_desde_podcasts(
                 continue
             for prog, eps in episodios_por_prog.items():
                 for ep in eps:
-                    if (nom_raw, ep["mp3"]) in vistos_ep_nuevo:
+                    if _es_homenaje(ep["titulo"]) or (nom_raw, ep["mp3"]) in vistos_ep_nuevo:
                         continue
                     tp = f" {normalizar_texto(ep['titulo'])} "
                     clave_hit = next((c for c in claves_cand if f" {c} " in tp), None)
@@ -1205,10 +1257,7 @@ def incorporar_desde_podcasts(
 
             for es_solo, ep in seleccion:
                 prog = ep["programa"]
-                if prog not in hosts_cache:
-                    hosts_cache[prog] = _identificar_hosts_podcast(prog, episodios_por_prog[prog], estado, por_nombre)
-                    reg["hosts_podcast"][prog] = [h.tolist() for h in hosts_cache[prog]]
-                hosts = hosts_cache.get(prog, [])
+                hosts = _obtener_hosts(prog)
                 turnos = _descargar_turnos_podcast(ep["mp3"], skip_seg=ep["skip_seg"], max_seg=300, max_bytes=8 << 20)
                 if len(turnos) < 5:
                     continue
@@ -1321,6 +1370,7 @@ def main() -> None:
     p.add_argument("--todo", action="store_true")
     p.add_argument("--max-refuerzo", type=int, default=100)
     p.add_argument("--max-nuevos", type=int, default=80)
+    p.add_argument("--reintentar-sin-acierto", action="store_true", help="Reintentar episodios/candidatos previos sin trozos guardados")
     p.add_argument("--sin-persistir", action="store_true", help="No escribir `data/ampliaciones.npz` ni `ampliaciones_fichas.json`")
     args = p.parse_args()
 
@@ -1368,6 +1418,7 @@ def main() -> None:
                 max_nuevos=args.max_nuevos,
                 candidatos_nuevos_extra=REFERENTES_SIN_MUESTRA,
                 amp=amp,
+                reintentar_sin_acierto=args.reintentar_sin_acierto,
             )
             print("Podcasts:", res_p, flush=True)
             guardar_estado_web(estado)

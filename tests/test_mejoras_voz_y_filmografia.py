@@ -147,7 +147,7 @@ def test_as_norm_mejora_discriminacion_contra_imanes():
 
 def test_incorporar_voces_poda_intrusos_y_alias(monkeypatch):
     import voz
-    from incorporar_voces import _claves_nombre_actor, _es_entrevista_solitaria, podar_intrusos_estado
+    from incorporar_voces import _claves_nombre_actor, _es_entrevista_solitaria, _es_homenaje, podar_intrusos_estado
 
     assert "lluis posada" in _claves_nombre_actor("Luis Posada")
     assert "ricard solans" in _claves_nombre_actor("Ricardo Solans")
@@ -168,6 +168,12 @@ def test_incorporar_voces_poda_intrusos_y_alias(monkeypatch):
     assert _es_entrevista_solitaria("Charleta con PABLO DOMÍNGUEZ LAGARES", "pablo dominguez lagares") is True
     assert _es_entrevista_solitaria("T3xC19, amb Carles Lladó i Josep Maria Mas", "carles llado") is False
     assert _es_entrevista_solitaria("108. Especial Bluey, con Lucía Pérez y Daniela Portugués", "lucia perez") is False
+
+    assert _es_homenaje("98. Homenaje a Ricardo Solans") is True
+    assert _es_homenaje("T3xC15 Un homenatge a Pep Torrents, amb Teresa Manresa i Marc Torrents") is True
+    assert _es_homenaje("51. Especial Carlos Revilla") is True
+    assert _es_homenaje("109. Especial Wicked, con Sara Heras") is False
+    assert _es_homenaje("89. Pere Molina") is False
 
     # Fallback a ffmpeg cuando soundfile.read no puede decodificar un contenedor alternativo (p. ej. m4a)
     llamadas_ff = []

@@ -17,6 +17,10 @@ on:
         description: "Máximo de dobladores nuevos a incorporar en esta tanda"
         required: false
         default: "45"
+      reintentar_fallidos:
+        description: "Reintentar episodios/candidatos previos sin captura (true/false)"
+        required: false
+        default: "false"
 
 jobs:
   ampliar:
@@ -60,7 +64,11 @@ jobs:
           ESTAVOZ_ONNX: frontend/modelo/voxblink-int8.onnx
         run: |
           python despliegue/exportar_web.py
-          python backend/incorporar_voces.py --podar --eldoblaje --podcasts --max-refuerzo "${{ inputs.max_refuerzo || '55' }}" --max-nuevos "${{ inputs.max_nuevos || '45' }}"
+          EXTRA=""
+          if [ "${{ inputs.reintentar_fallidos }}" = "true" ]; then
+            EXTRA="--reintentar-sin-acierto"
+          fi
+          python backend/incorporar_voces.py --podar --eldoblaje --podcasts --max-refuerzo "${{ inputs.max_refuerzo || '55' }}" --max-nuevos "${{ inputs.max_nuevos || '45' }}" $EXTRA
 
       - name: Persistir ampliaciones en dataset privado y reexportar con LDA completo
         env:
