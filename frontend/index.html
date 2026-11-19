@@ -742,6 +742,7 @@ function analizarVAD(audio, sr = SR) {
 
   const vocal = filtrarBandaVocal(audio, sr);
   const energiasDb = new Float32Array(nTramas);
+  const energiasVocDb = new Float32Array(nTramas);
   const zcrs = new Float32Array(nTramas);
   const ratiosVocal = new Float32Array(nTramas);
 
@@ -756,74 +757,87 @@ function analizarVAD(audio, sr = SR) {
       if (s !== prevSign) { cruces++; prevSign = s; }
     }
     const rms = Math.sqrt(sumSq / tamTrama + 1e-12);
+    const rmsVoc = Math.sqrt(sumVoc / tamTrama + 1e-12);
     energiasDb[i] = 20 * Math.log10(Math.max(rms, 1e-6));
+    energiasVocDb[i] = 20 * Math.log10(Math.max(rmsVoc, 1e-6));
     zcrs[i] = cruces / tamTrama;
     ratiosVocal[i] = sumSq > 1e-10 ? sumVoc / sumSq : 0;
   }
 
   // Suelo de ruido (p10) con protección para monólogos continuos sin pausas largas
   const ordDb = Float32Array.from(energiasDb).sort();
+  const ordVocDb = Float32Array.from(energiasVocDb).sort();
   const ordVoc = Float32Array.from(ratiosVocal).sort();
   const ordZcr = Float32Array.from(zcrs).sort();
   const p10Db = ordDb[Math.floor(ordDb.length * 0.10)] ?? -60;
   const p50Db = ordDb[Math.floor(ordDb.length * 0.50)] ?? -60;
   const p90Db = ordDb[Math.floor(ordDb.length * 0.90)] ?? -60;
+  const p10VocDb = ordVocDb[Math.floor(ordVocDb.length * 0.10)] ?? -60;
+  const p90VocDb = ordVocDb[Math.floor(ordVocDb.length * 0.90)] ?? -60;
   const medVoc = ordVoc[Math.floor(ordVoc.length * 0.50)] ?? 0;
   const medZcr = ordZcr[Math.floor(ordZcr.length * 0.50)] ?? 0;
   const esVozContinua = (p90Db - p10Db) < 12 && p50Db >= -34 && medVoc >= 0.45 && medZcr >= 0.005 && medZcr <= 0.42;
   const sueloRuidoDb = esVozContinua ? Math.min(p10Db, -34.0) : p10Db;
   const umbralActivoDb = Math.max(sueloRuidoDb + 7.5, -48.0);
-
-  // Clasificación por trama: energía + ZCR vocal (incluyendo voces muy graves) + banda vocal
-  const activas = new Uint8Array(nTramas);
-  for (let i = 0; i < nTramas; i++) {
-    if (energiasDb[i] >= umbralActivoDb && zcrs[i] >= 0.005 && zcrs[i] <= 0.45 && ratiosVocal[i] >= 0.36) {
-      activas[i] = 1;
-    }
-  }
-
-  // Relleno de micro-pausas (< 200 ms) para no partir palabras entre oclusivas
   const tramasPausaMin = Math.round(0.200 * sr / pasoTrama);
-  let hueco = 0;
-  for (let i = 0; i < nTramas; i++) {
-    if (!activas[i]) hueco++;
-    else {
-      if (hueco > 0 && hueco <= tramasPausaMin) {
-        for (let k = i - hueco; k < i; k++) activas[k] = 1;
-      }
-      hueco = 0;
-    }
-  }
-
-  // Agrupación en segmentos continuos de voz
   const minDurSeg = 0.25;
   const minPausaSeg = 0.40;
-  const segmentos = [];
-  let enVoz = false, iniT = 0;
-  for (let i = 0; i < nTramas; i++) {
-    if (activas[i] && !enVoz) { enVoz = true; iniT = i; }
-    else if (!activas[i] && enVoz) {
-      enVoz = false;
-      const iniM = iniT * pasoTrama, finM = Math.min(audio.length, i * pasoTrama + tamTrama);
-      const dur = (finM - iniM) / sr;
-      if (dur >= minDurSeg) {
-        if (segmentos.length && (iniM - segmentos[segmentos.length - 1].finM) / sr < minPausaSeg) {
-          const prev = segmentos.pop();
-          segmentos.push({ iniM: prev.iniM, finM, dur: (finM - prev.iniM) / sr });
-        } else {
-          segmentos.push({ iniM, finM, dur });
+
+  const extraerSegmentos = (serieDb, umbralDb, umbralVoc) => {
+    const activas = new Uint8Array(nTramas);
+    for (let i = 0; i < nTramas; i++) {
+      if (serieDb[i] >= umbralDb && zcrs[i] >= 0.005 && zcrs[i] <= 0.45 && ratiosVocal[i] >= umbralVoc) {
+        activas[i] = 1;
+      }
+    }
+    let hueco = 0;
+    for (let i = 0; i < nTramas; i++) {
+      if (!activas[i]) hueco++;
+      else {
+        if (hueco > 0 && hueco <= tramasPausaMin) {
+          for (let k = i - hueco; k < i; k++) activas[k] = 1;
+        }
+        hueco = 0;
+      }
+    }
+    const segs = [];
+    let enVoz = false, iniT = 0;
+    for (let i = 0; i < nTramas; i++) {
+      if (activas[i] && !enVoz) { enVoz = true; iniT = i; }
+      else if (!activas[i] && enVoz) {
+        enVoz = false;
+        const iniM = iniT * pasoTrama, finM = Math.min(audio.length, i * pasoTrama + tamTrama);
+        const dur = (finM - iniM) / sr;
+        if (dur >= minDurSeg) {
+          if (segs.length && (iniM - segs[segs.length - 1].finM) / sr < minPausaSeg) {
+            const prev = segs.pop();
+            segs.push({ iniM: prev.iniM, finM, dur: (finM - prev.iniM) / sr });
+          } else {
+            segs.push({ iniM, finM, dur });
+          }
         }
       }
     }
-  }
-  if (enVoz) {
-    const iniM = iniT * pasoTrama, finM = audio.length;
-    const dur = (finM - iniM) / sr;
-    if (dur >= minDurSeg) segmentos.push({ iniM, finM, dur });
-  }
+    if (enVoz) {
+      const iniM = iniT * pasoTrama, finM = audio.length;
+      const dur = (finM - iniM) / sr;
+      if (dur >= minDurSeg) segs.push({ iniM, finM, dur });
+    }
+    return segs;
+  };
 
+  let segmentos = extraerSegmentos(energiasDb, umbralActivoDb, 0.36);
+  let duracionVoz = segmentos.reduce((acc, s) => acc + s.dur, 0);
+  // Respaldo adaptativo por contraste en banda vocal (100-3500 Hz) para diálogo sobre música/graves de TV
+  if (duracionVoz < 1.5 && p90VocDb >= -40 && (p90VocDb - p10VocDb) >= 3.0 && medVoc >= 0.30 && medZcr >= 0.005 && medZcr <= 0.36) {
+    const segsRespaldo = extraerSegmentos(energiasVocDb, Math.max(p10VocDb + 2.5, -48.0), 0.28);
+    const durRespaldo = segsRespaldo.reduce((acc, s) => acc + s.dur, 0);
+    if (durRespaldo > duracionVoz) {
+      segmentos = segsRespaldo;
+      duracionVoz = durRespaldo;
+    }
+  }
   const duracionTotal = audio.length / sr;
-  const duracionVoz = segmentos.reduce((acc, s) => acc + s.dur, 0);
 
   // Segmentación en turnos de palabra independientes (pausas >= 0.6 s para diarización)
   const turnos = [];
@@ -1016,14 +1030,11 @@ async function huellasDe(audio) {
     return [await huellaTrozo(audio)];
   }
   const ventanas = [];
-  // Tomas estándar (7.5 - 11 s): alinear con los trozos de 6 s del índice mediante 2 ventanas solapadas
-  if (audio.length <= 11 * SR) {
+  // Tomas estándar (7.5 - 18 s): 3 ventanas solapadas de 6 s para activar el filtro de coherencia mutua
+  if (audio.length <= 18 * SR) {
     const w6 = 6 * SR;
-    ventanas.push(audio.slice(0, w6), audio.slice(audio.length - w6));
-    if (self.crossOriginIsolated) ventanas.push(audio);
-  } else if (audio.length <= 18 * SR) {
-    const mitad = Math.floor(audio.length / 2);
-    ventanas.push(audio.slice(0, Math.min(audio.length, mitad + SR)), audio.slice(Math.max(0, mitad - SR)));
+    const iniMed = Math.max(0, Math.floor((audio.length - w6) / 2));
+    ventanas.push(audio.slice(0, w6), audio.slice(iniMed, iniMed + w6), audio.slice(audio.length - w6));
   } else {
     const paso = 6 * SR;
     for (let i = 0; i < audio.length; i += paso) {
@@ -1079,6 +1090,10 @@ function puntuar(consulta, top = 3, candidatos = null, f0Consulta = null) {
   for (let qi = 0; qi < qs.length; qi++) {
     const q = qs[qi], w = pesos[qi] / sumaPesos;
     for (let k = 0; k < dim; k++) qMedia[k] += q[k] * w;
+  }
+  const normaQ = Math.hypot(...qMedia);
+  if (normaQ > 1e-6) {
+    for (let k = 0; k < dim; k++) qMedia[k] /= normaQ;
   }
   const parecido = (vs, o) => {
     let dot = 0;
@@ -1797,18 +1812,34 @@ btn.onclick = async () => {
   const ctxOnda = canvasOnda && canvasOnda.getContext ? canvasOnda.getContext('2d') : null;
   const barrasOnda = [];
   const onda = new Float32Array(analizador.fftSize);
-  let vivo = true, pico = 0, muestrasVozVivo = 0, aviso2s = false, aviso5s = false;
+  const espectro = new Uint8Array(analizador.frequencyBinCount);
+  const hzPorBin = ctx.sampleRate / analizador.fftSize;
+  const binMinTot = Math.max(1, Math.floor(60 / hzPorBin));
+  const binMaxTot = Math.min(espectro.length - 1, Math.ceil(7500 / hzPorBin));
+  const binMinVoc = Math.max(binMinTot, Math.floor(200 / hzPorBin));
+  const binMaxVoc = Math.min(binMaxTot, Math.ceil(3400 / hzPorBin));
+  let vivo = true, pico = 0, segVozNum = 0, ultimoFrameTs = performance.now(), aviso2s = false, aviso5s = false;
   (function mide() {
     if (!vivo) return;
+    const ahora = performance.now();
+    const dtSeg = Math.min(0.1, Math.max(0, (ahora - ultimoFrameTs) / 1000));
+    ultimoFrameTs = ahora;
     analizador.getFloatTimeDomainData(onda);
+    analizador.getByteFrequencyData(espectro);
     const rms = Math.sqrt(onda.reduce((a, x) => a + x * x, 0) / onda.length);
     const nivel = Math.min(1, Math.max(0, (20 * Math.log10(rms + 1e-6) + 50) / 44));  // -50 dB … -6 dB
     pico = Math.max(nivel, pico - 0.025);
     leds.forEach((l, i) => l.classList.toggle('on', i < Math.round(pico * leds.length)));
     document.documentElement.style.setProperty('--nivel', nivel.toFixed(3));
-    const conVoz = nivel > 0.18;
-    if (conVoz) muestrasVozVivo += analizador.fftSize;
-    const segVozNum = muestrasVozVivo / ctx.sampleRate;
+    let eTot = 0, eVoc = 0;
+    for (let b = binMinTot; b <= binMaxTot; b++) {
+      const e = espectro[b] * espectro[b];
+      eTot += e;
+      if (b >= binMinVoc && b <= binMaxVoc) eVoc += e;
+    }
+    const ratioVocVivo = eTot > 1 ? eVoc / eTot : 0;
+    const conVoz = nivel > 0.18 && ratioVocVivo >= 0.40;
+    if (conVoz) segVozNum += dtSeg;
     const segVoz = segVozNum.toFixed(1);
     if (segVozNum >= 2.0 && !aviso2s) { aviso2s = true; vibrar(12); }
     if (segVozNum >= 5.0 && !aviso5s) { aviso5s = true; vibrar([14, 36, 14]); }
@@ -1828,10 +1859,12 @@ btn.onclick = async () => {
     }
 
     const prefToma = acumulandoToma ? `Sumando toma ${String(toma).padStart(2, '0')}` : `Toma ${String(toma).padStart(2, '0')}`;
-    if (segVozNum >= 5.0) {
-      estado.textContent = `${prefToma} · ¡Voz suficiente! (${segVoz} s) · puedes PARAR`;
+    if (nivel > 0.24 && ratioVocVivo < 0.36 && segVozNum < 5.0) {
+      estado.textContent = `${prefToma} · Música o fondo alto… (${segVoz} s de voz)`;
+    } else if (segVozNum >= 5.0) {
+      estado.textContent = `${prefToma} · ¡Voz clara suficiente! (${segVoz} s) · puedes PARAR`;
     } else if (segVozNum >= 2.0) {
-      estado.textContent = `${prefToma} · ${segVoz} s de voz (puedes PARAR o seguir)`;
+      estado.textContent = `${prefToma} · ${segVoz} s de voz clara (puedes PARAR o seguir)`;
     } else {
       estado.textContent = `${prefToma} · Escuchando… (${segVoz} s de voz)`;
     }

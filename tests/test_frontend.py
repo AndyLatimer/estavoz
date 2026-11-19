@@ -187,6 +187,21 @@ vm.runInContext(`
   const q = new Float32Array(${JSON.stringify(p.q)});
   q.durPeso = 1;
   const top = puntuar([q], 3, null);
+
+  // Comprobar renormalización esférica L2 de qMedia en consultas multi-ventana (evita encogimiento coseno)
+  const qOrt = new Float32Array(dim);
+  let dotQ = 0;
+  for (let i = 0; i < dim; i++) { qOrt[i] = i === 0 ? 1 : 0; dotQ += qOrt[i] * q[i]; }
+  for (let i = 0; i < dim; i++) qOrt[i] -= dotQ * q[i];
+  const nOrt = Math.hypot(...qOrt) || 1;
+  for (let i = 0; i < dim; i++) qOrt[i] /= nOrt;
+  const qA = new Float32Array(dim), qB = new Float32Array(dim);
+  for (let i = 0; i < dim; i++) {
+    qA[i] = 0.8 * q[i] + 0.6 * qOrt[i];
+    qB[i] = 0.8 * q[i] - 0.6 * qOrt[i];
+  }
+  qA.durPeso = 1; qB.durPeso = 1;
+  const topMulti = puntuar([qA, qB], 3, null);
   const seg = juntarSegmentos(new Float32Array(3200), [
     { iniM: 0, finM: 800, dur: 0.05 },
     { iniM: 1200, finM: 2400, dur: 0.075 },
@@ -214,6 +229,18 @@ vm.runInContext(`
     ruidoBlanco[i] = ((seed / 4294967296) * 2 - 1) * 0.2;
   }
   const vadRuido = analizarVAD(ruidoBlanco, 16000);
+
+  // Escena con fondo continuo de TV (música grave constante + diálogo moderado encima): debe recuperarse vía respaldo adaptativo
+  const conFondoTv = new Float32Array(16000 * 5);
+  for (let i = 0; i < conFondoTv.length; i++) {
+    const t = i / 16000;
+    const fondo = 0.14 * Math.sin(2 * Math.PI * 65 * t) + 0.08 * Math.sin(2 * Math.PI * 130 * t);
+    const voz = (i >= 16000 && i < 16000 * 4)
+      ? 0.20 * (0.65 + 0.35 * Math.sin(2 * Math.PI * 4 * t)) * (0.6 * Math.sin(2 * Math.PI * 220 * t) + 0.4 * Math.sin(2 * Math.PI * 660 * t))
+      : 0;
+    conFondoTv[i] = fondo + voz;
+  }
+  const vadFondoTv = analizarVAD(conFondoTv, 16000);
 
   const genOnda = (f0) => {
     const out = new Float32Array(16000);
@@ -309,6 +336,8 @@ vm.runInContext(`
   globalThis.__out = {
     id: top[0].id,
     parecido: top[0].parecido,
+    parecidoMulti: topMulti[0].parecido,
+    idMulti: topMulti[0].id,
     estado: top.estado,
     pct: aPorcentajeCalibrado(top[0].parecido),
     segLen: seg.length,
@@ -318,6 +347,7 @@ vm.runInContext(`
     vadContinuoOk: vadContinuo.esValida,
     vadRuidoOk: vadRuido.esValida,
     vadRuidoMotivo: vadRuido.motivo,
+    vadFondoTvOk: vadFondoTv.esValida,
     f0110,
     f0220,
     f0PenalizadoOk: Boolean(penalizadoF0 && penalizadoF0.parecido < top[0].parecido - 0.02),
@@ -367,6 +397,9 @@ console.log(JSON.stringify(sandbox.__out));
     out = json.loads(proc.stdout.strip())
     assert out["id"] == py_slugs[int(orden[0])]
     assert abs(out["parecido"] - float(ajustados[orden[0]])) < 1e-4
+    # La media esférica renormalizada de (0.8*q + 0.6*qOrt) y (0.8*q - 0.6*qOrt) debe reconstruir exactamente q
+    assert out["idMulti"] == out["id"]
+    assert abs(out["parecidoMulti"] - out["parecido"]) < 1e-4
     assert out["estado"] == py_dec.estado.value
     assert out["pct"] == py_pct
     assert out["segLen"] == 2000
@@ -376,10 +409,11 @@ console.log(JSON.stringify(sandbox.__out));
     assert out["vadContinuoOk"] is True
     assert out["vadRuidoOk"] is False
     assert out["vadRuidoMotivo"] in ("musica_ruido", "corto")
+    assert out["vadFondoTvOk"] is True
     assert out["f0110"] is not None and abs(out["f0110"] - 110.0) < 8.0
     assert out["f0220"] is not None and abs(out["f0220"] - 220.0) < 12.0
     assert out["f0PenalizadoOk"] is True
-    assert out["ventanas9s"] == [16000 * 6, 16000 * 6]
+    assert out["ventanas9s"] == [16000 * 6, 16000 * 6, 16000 * 6]
     assert out["tieneFicha"] is True
     assert out["tieneDiagnostico"] is True
     assert out["tieneRechazoLimpio"] is True

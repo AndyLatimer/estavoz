@@ -271,6 +271,9 @@ def _ranking_completo(
         qs = proyectar(consulta, INDICE["lda_mu"], INDICE["lda_W"])
         pesos_q = _ponderar_ventanas_consulta(qs)
         q_pond = (pesos_q[:, None] * qs).sum(axis=0)
+        norma_q = float(np.linalg.norm(q_pond))
+        if norma_q > 1e-6:
+            q_pond = q_pond / norma_q
         sims_cent = q_pond @ INDICE["centroides"].T
         sims_troz = q_pond @ INDICE["vectores"].T
         inicio = INDICE["inicio"]

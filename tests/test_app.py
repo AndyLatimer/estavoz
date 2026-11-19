@@ -193,3 +193,39 @@ def test_cargar_indice_prioriza_modo_web_frente_a_indice_npz(tmp_path: Path, mon
     finally:
         monkeypatch.undo()
         backend_app.cargar_indice()
+
+
+def test_ranking_multi_ventana_renormaliza_esfera_l2(monkeypatch):
+    """La media ponderada de múltiples ventanas debe renormalizarse a norma unitaria en `_ranking_completo`."""
+    import app as backend_app
+
+    dim = 16
+    rng = np.random.default_rng(99)
+    C = rng.standard_normal((10, dim)).astype(np.float32)
+    C /= np.linalg.norm(C, axis=1, keepdims=True)
+    inicio = np.arange(0, 11, dtype=np.int32)
+    slugs = [f"{i}-actor" for i in range(10)]
+    q = C[2].copy()
+    q_ort = rng.standard_normal(dim).astype(np.float32)
+    q_ort -= float(q_ort @ q) * q
+    q_ort /= np.linalg.norm(q_ort)
+    q_par = np.vstack([0.8 * q + 0.6 * q_ort, 0.8 * q - 0.6 * q_ort]).astype(np.float32)
+
+    fake_ind = {
+        "modo": "web",
+        "lda_mu": np.zeros(dim, dtype=np.float32),
+        "lda_W": np.eye(dim, dtype=np.float32),
+        "centroides": C,
+        "vectores": C,
+        "inicio": inicio,
+        "slugs": slugs,
+        "idx_por_slug": {s: i for i, s in enumerate(slugs)},
+        "fichas": {s: {"nombre": s} for s in slugs},
+        "mu_a": np.zeros(10, dtype=np.float32),
+        "sd_a": np.ones(10, dtype=np.float32),
+    }
+    monkeypatch.setattr(backend_app, "INDICE", fake_ind)
+    r_uno = backend_app._ranking_completo(q[None, :])
+    r_dos = backend_app._ranking_completo(q_par)
+    assert r_uno[0][1] == "2-actor" and r_dos[0][1] == "2-actor"
+    assert abs(r_uno[0][0] - r_dos[0][0]) < 1e-4
